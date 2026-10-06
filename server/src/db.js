@@ -5,7 +5,14 @@ import bcrypt from 'bcryptjs'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../data/said.db')
+
+// SAFE PATH RESOLUTION: If Render sets a forbidden root path, we fallback to a safe local project path
+let dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../data/said.db')
+if (dbPath.startsWith('/var/data')) {
+  dbPath = path.join(process.cwd(), 'data/said.db')
+}
+
+// Safely create the folder inside the project directory
 fs.mkdirSync(path.dirname(dbPath), { recursive: true })
 
 export const db = new Database(dbPath)
