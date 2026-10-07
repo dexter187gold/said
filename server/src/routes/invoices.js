@@ -8,6 +8,7 @@ import {
   getDefaultTemplateId,
   invoiceInstanceVars,
   renderThreeWay,
+  buildLinesHtml,
 } from '../services/documentModel.js'
 
 export const invoicesRouter = Router()
@@ -159,41 +160,36 @@ invoicesRouter.get('/:id/pdf', async (req, res, next) => {
   try {
     const inv = loadInvoice(req.params.id)
     if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
-    const linesHtml = inv.lines
-      .map(
-        (l) =>
-          `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.qty * l.price)}</td></tr>`
-      )
-      .join('')
+    const docType = inv.doc_type || 'invoice'
+    const templateId = inv.template_id || getDefaultTemplateId(docType)
+    const instance = invoiceInstanceVars(inv)
+    // Ensure table rows always present from live lines
+    instance.lines_html = buildLinesHtml(inv.lines)
+    instance.line_items_html = instance.lines_html
+    instance.rate_card_html = instance.rate_card_html || instance.lines_html
     const fallbackHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-body{font-family:Segoe UI,system-ui,sans-serif;font-size:11px;padding:16px;color:#0f172a;line-height:1.45}
+body{font-family:Segoe UI,system-ui,sans-serif;font-size:11px;padding:16px;color:#0f172a}
 .header{display:flex;justify-content:space-between;border-bottom:3px solid #007A4D;padding-bottom:10px;margin-bottom:12px}
-.brand{font-size:18px;font-weight:800;color:#007A4D}
-.meta{color:#64748b;font-size:10px}
-table{width:100%;border-collapse:collapse;margin:12px 0}
+.brand{font-size:18px;font-weight:800;color:#007A4D}table{width:100%;border-collapse:collapse;margin:12px 0}
 th{background:#1e3a5f;color:#fff;padding:7px 8px;text-align:left;font-size:9px;text-transform:uppercase}
-td{padding:7px 8px;border-bottom:1px solid #e2e8f0}
+td{padding:7px 8px;border-bottom:1px solid #e2e8f0}.right{text-align:right}.center{text-align:center}
 .grand{font-weight:800;color:#007A4D;font-size:14px}
 .box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;margin:8px 0}
-.right{text-align:right}
+.meta{color:#64748b;font-size:10px}
 </style></head><body>
-<div class="header">
-  <div><div class="brand">{{company_name}}</div>
-  <div class="meta">{{company_address}} · {{company_phone}} · VAT {{company_vat}}</div></div>
-  <div class="right"><strong>{{number}}</strong><br/><span class="meta">{{date}} · {{status}}</span></div>
-</div>
+<div class="header"><div><div class="brand">{{company_name}}</div>
+<div class="meta">{{company_address}} · {{company_phone}} · VAT {{company_vat}}</div></div>
+<div class="right"><strong>{{number}}</strong><br/><span class="meta">{{date}} · {{status}}</span></div></div>
 <div class="box"><strong>Bill to</strong><br/>{{client_name}}<br/>{{client_address}}<br/>{{client_phone}}</div>
-<table><thead><tr><th>Description</th><th>Qty</th><th class="right">Price</th><th class="right">Amount</th></tr></thead>
+<p class="meta">Devices: {{devices}} · Service: {{service_type}} · Account: {{account_type}}</p>
+<table><thead><tr><th>Description</th><th class="center">Qty</th><th class="right">Rate</th><th class="right">Amount</th></tr></thead>
 <tbody>{{lines_html}}</tbody></table>
 <p class="right">Exclusive {{exclusive}} · VAT {{vat_amount}} · <span class="grand">Total {{total}}</span></p>
 <p class="right meta">Paid {{amount_paid}} · Balance {{balance}}</p>
 <p class="meta">{{payment_note}}</p>
 <p class="meta">Bank: {{company_bank}} · Acc {{company_account}} · Branch {{company_branch}}</p>
 </body></html>`
-    const templateId = inv.template_id || getDefaultTemplateId(inv.doc_type || 'invoice')
-    const instance = invoiceInstanceVars(inv)
-    instance.lines_html = linesHtml
-    const { html } = renderThreeWay({
+    const { html, layers } = renderThreeWay({
       templateId,
       instanceVars: instance,
       fallbackHtml,
@@ -201,7 +197,26 @@ td{padding:7px 8px;border-bottom:1px solid #e2e8f0}
     const pdf = await htmlToPdf(html, {})
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `inline; filename="${inv.number}.pdf"`)
+    res.setHeader('X-SAID-Layout', layers.layout || '')
+    res.setHeader('X-SAID-Company', layers.company || '')
     res.send(pdf)
+  } catch (e) {
+    next(e)
+  }
+})
+
+invoicesRouter.get('/:id/html', (req, res, next) => {
+  try {
+    const inv = loadInvoice(req.params.id)
+    if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
+    const docType = inv.doc_type || 'invoice'
+    const templateId = inv.template_id || getDefaultTemplateId(docType)
+    const instance = invoiceInstanceVars(inv)
+    instance.lines_html = buildLinesHtml(inv.lines)
+    instance.line_items_html = instance.lines_html
+    const fallbackHtml = `<html><body><h1>{{company_name}}</h1><p>{{number}}</p><table>{{lines_html}}</table><p>{{total}}</p></body></html>`
+    const { html } = renderThreeWay({ templateId, instanceVars: instance, fallbackHtml })
+    res.type('html').send(html)
   } catch (e) {
     next(e)
   }

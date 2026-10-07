@@ -238,4 +238,46 @@ export const PC_REPAIR_QUOTE_TEMPLATES = [
 `
     ),
   },
+
+  {
+    id: 'tax_invoice_sa',
+    label: 'Tax invoice (SA COD structure)',
+    category: 'Invoicing',
+    business_types: 'pc_repair,it,msp,all',
+    description: 'Tax invoice matching PC REPAIR DEX header / client grid / lines / bank layout',
+    html: page(
+      'green',
+      'TAX INVOICE',
+      'Itemised work · COD / Account · SA business document',
+      `
+  <div class="info-grid">
+    <div class="info-cell"><div class="l">Bill to</div><div class="v">{{client_name}}</div><div class="badge-line">{{client_address}}</div><div class="badge-line">{{client_phone}}</div></div>
+    <div class="info-cell"><div class="l">Devices</div><div class="v">{{devices}}</div></div>
+    <div class="info-cell"><div class="l">Service type</div><div class="v">{{service_type}}</div></div>
+  </div>
+  <h2>1. LINE ITEMS</h2>
+  <table>
+    <thead><tr><th class="green">Description</th><th class="center green">Qty</th><th class="right green">Rate</th><th class="right green">Amount</th></tr></thead>
+    <tbody>{{lines_html}}</tbody>
+  </table>
+  <p class="right">Exclusive {{exclusive}} · VAT {{vat_amount}}</p>
+  <div class="price-box">
+    <div>
+      <div class="label">Total due</div>
+      <div class="save">Paid {{amount_paid}} · Balance {{balance}}</div>
+    </div>
+    <div class="amount">{{total}}</div>
+  </div>
+  <h2>2. PAYMENT</h2>
+  <p>{{payment_note}}</p>
+  <p class="note"><strong>Bank:</strong> {{company_bank}} · Acc {{company_account}} · Branch {{company_branch}} · Ref {{number}}</p>
+  <p class="note">{{notes}}</p>
+  <div class="sig-row">
+    <div class="sig-box">Customer acknowledgement</div>
+    <div class="sig-box">Date</div>
+    <div class="sig-box">{{company_name}}</div>
+  </div>
+`
+    ),
+  },
 ]

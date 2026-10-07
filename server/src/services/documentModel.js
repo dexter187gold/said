@@ -1,11 +1,11 @@
 /**
  * 3-way document model (SAID)
  *
- * Layer 1 — LAYOUT: system/custom HTML template (structure only, {{placeholders}})
- * Layer 2 — COMPANY: logo, name, VAT, bank, address from company + settings
- * Layer 3 — INSTANCE: this invoice/ticket/quote data (client, lines, status, dates)
+ * Layer 1 — LAYOUT: HTML template (structure only, {{placeholders}}) — matches PDF designs
+ * Layer 2 — COMPANY: name, address, phone, VAT, bank from company table
+ * Layer 3 — INSTANCE: this quote/invoice client, lines, dates, status, devices
  *
- * Flow: Template → fill company vars → fill instance vars → HTML / PDF
+ * Merge order: layout HTML → company vars → instance vars (instance wins)
  */
 
 import { db } from '../db.js'
@@ -14,7 +14,7 @@ import { fill } from './pdf.js'
 export function getCompanyLayer() {
   const co = db.prepare(`SELECT * FROM company WHERE id = 'main'`).get() || {}
   return {
-    company_name: co.name || '',
+    company_name: co.name || 'Company',
     company_email: co.email || '',
     company_phone: co.phone || '',
     company_address: co.address || '',
@@ -34,14 +34,17 @@ export function getCompanyLayer() {
 }
 
 export function getDefaultTemplateId(docType = 'invoice') {
-  const co = db.prepare(`SELECT invoice_template_id FROM company WHERE id = 'main'`).get()
-  if (docType === 'invoice' || docType === 'quote' || docType === 'credit') {
-    return co?.invoice_template_id || 'tax_invoice_full'
+  const co = db.prepare(`SELECT * FROM company WHERE id = 'main'`).get() || {}
+  if (docType === 'quote') {
+    return co.quote_template_id || 'quote_flatrate_cod'
+  }
+  if (docType === 'credit') {
+    return co.credit_template_id || 'credit_note'
   }
   if (docType === 'ticket' || docType === 'jobcard') {
-    return 'vehicle_job_card' // fallback system template if exists; else built-in job card
+    return 'job_card'
   }
-  return null
+  return co.invoice_template_id || 'tax_invoice_sa'
 }
 
 export function loadTemplate(templateId) {
@@ -49,17 +52,55 @@ export function loadTemplate(templateId) {
   return db.prepare(`SELECT * FROM document_templates WHERE id = ?`).get(templateId) || null
 }
 
-/** Build vars for an invoice-like document (layer 3) */
-export function invoiceInstanceVars(inv, client = null) {
-  const lines = inv.lines || []
-  const lines_html = lines
+function money(n) {
+  return `R ${Number(n || 0).toFixed(2)}`
+}
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** Line rows matching PDF tables (Description | Qty | Rate | Amount) */
+export function buildLinesHtml(lines = []) {
+  return (lines || [])
+    .map((l) => {
+      const qty = Number(l.qty || 0)
+      const price = Number(l.price || 0)
+      return `<tr>
+        <td>${esc(l.description)}</td>
+        <td class="center">${qty}</td>
+        <td class="right">${money(price)}</td>
+        <td class="right">${money(qty * price)}</td>
+      </tr>`
+    })
+    .join('')
+}
+
+/** Ad-hoc rate card rows */
+export function buildRateCardHtml(lines = []) {
+  if (!lines?.length) {
+    return `<tr><td>Driver installation &amp; verification</td><td class="center">per device</td><td class="right">R 220.00</td><td>Essential for every device</td></tr>
+<tr><td>Essential applications install</td><td class="center">per device</td><td class="right">R 150.00</td><td>Browser, PDF, media, security</td></tr>
+<tr><td>Microsoft Office installation</td><td class="center">per device</td><td class="right">R 120.00</td><td>Customer-supplied licence</td></tr>`
+  }
+  return lines
     .map(
       (l) =>
-        `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(Number(l.qty) * Number(l.price))}</td></tr>`
+        `<tr><td>${esc(l.description)}</td><td class="center">per unit</td><td class="right">${money(l.price)}</td><td>${esc(l.notes || '')}</td></tr>`
     )
     .join('')
+}
+
+export function invoiceInstanceVars(inv, client = null) {
+  const lines = inv.lines || []
+  const lines_html = buildLinesHtml(lines)
   const c = client || inv.client || {}
   const totalFmt = money(inv.total)
+  const balanceFmt = money(Math.max(0, Number(inv.total || 0) - Number(inv.amount_paid || 0)))
+
   return {
     doc_type: inv.doc_type || 'invoice',
     number: inv.number || '',
@@ -80,8 +121,8 @@ export function invoiceInstanceVars(inv, client = null) {
     vat_amount: money(inv.vat_amount),
     total: totalFmt,
     amount_paid: money(inv.amount_paid),
-    amount_due: money(Math.max(0, Number(inv.total || 0) - Number(inv.amount_paid || 0))),
-    balance: money(Math.max(0, Number(inv.total || 0) - Number(inv.amount_paid || 0))),
+    amount_due: balanceFmt,
+    balance: balanceFmt,
     client_name: c.name || '',
     client_email: c.email || '',
     client_phone: c.phone || '',
@@ -100,7 +141,7 @@ export function invoiceInstanceVars(inv, client = null) {
     estimated_hours: inv.estimated_hours || '2.0 – 2.5 hours',
     estimated_hours_note: inv.estimated_hours_note || 'Typical for drivers + apps',
     estimated_range: inv.estimated_range || totalFmt,
-    package_name: inv.package_name || 'COMPLETE JOB',
+    package_name: inv.package_name || inv.devices || 'COMPLETE JOB',
     package_save_note: inv.package_save_note || 'First-time COD Account client rate',
     vat_note: inv.vat_note || 'VAT: as applicable on final invoice.',
     exclusions:
@@ -112,53 +153,37 @@ export function invoiceInstanceVars(inv, client = null) {
     scope_html:
       inv.scope_html ||
       '<li>Driver installation &amp; verification</li><li>Essential applications</li><li>Microsoft Office installation (customer licence)</li><li>Critical Windows updates</li><li>Light optimisation</li><li>Travel within local area</li><li>14-day labour warranty</li>',
-    rate_card_html:
-      inv.rate_card_html ||
-      (lines.length
-        ? lines
-            .map(
-              (l) =>
-                `<tr><td>${esc(l.description)}</td><td class="center">per unit</td><td class="right">${money(l.price)}</td><td></td></tr>`
-            )
-            .join('')
-        : '<tr><td>Driver installation &amp; verification</td><td class="center">per device</td><td class="right">R 220</td><td>Essential</td></tr><tr><td>Essential applications install</td><td class="center">per device</td><td class="right">R 150</td><td>Browser, PDF, media</td></tr>'),
+    rate_card_html: inv.rate_card_html || buildRateCardHtml(lines),
   }
 }
 
-function money(n) {
-  return `R ${Number(n || 0).toFixed(2)}`
-}
-function esc(s) {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-
-/**
- * Resolve full HTML: Layer1 template + Layer2 company + Layer3 instance
- */
 export function renderThreeWay({ templateId, instanceVars = {}, fallbackHtml = null }) {
   const company = getCompanyLayer()
   const tpl = templateId ? loadTemplate(templateId) : null
-  const baseHtml = tpl?.html || fallbackHtml
+  const baseHtml = (tpl?.html && String(tpl.html).trim()) || fallbackHtml
   if (!baseHtml) {
     throw new Error('No layout template (layer 1) and no fallback HTML')
   }
-  const merged = { ...company, ...instanceVars }
+  const merged = { ...company }
+  for (const [k, v] of Object.entries(instanceVars || {})) {
+    if (v !== undefined && v !== null) merged[k] = v
+  }
+  if (merged.number && !merged.invoice_number) merged.invoice_number = merged.number
+  if (merged.lines_html && !merged.line_items_html) merged.line_items_html = merged.lines_html
+  if (merged.total && !merged.amount_due) merged.amount_due = merged.balance || merged.total
+
   return {
     html: fill(baseHtml, merged),
     template_id: tpl?.id || null,
     template_label: tpl?.label || null,
     layers: {
       layout: tpl?.id || 'fallback',
-      company: company.company_name || '(company)',
-      instance_keys: Object.keys(instanceVars),
+      company: company.company_name,
+      instance_keys: Object.keys(instanceVars || {}),
     },
   }
 }
 
-/** List templates suitable as layout bases (blank structure) */
 export function listLayoutTemplates(category = null) {
   let sql = `SELECT id, label, category, business_types, description, is_system FROM document_templates WHERE 1=1`
   const params = []

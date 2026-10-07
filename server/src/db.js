@@ -238,7 +238,7 @@ export function seedIfEmpty() {
   } else {
     // Refresh craft layouts (hourly / flat / ad-hoc quotes + core invoices)
     const critical = TEMPLATE_SEED.filter((t) =>
-      t.id.startsWith('quote_') || t.id === 'tax_invoice_full' || t.id === 'job_card' || t.id === 'quotation'
+      t.id.startsWith('quote_') || t.id === 'tax_invoice_full' || t.id === 'tax_invoice_sa' || t.id === 'job_card' || t.id === 'quotation'
     )
     const tx = db.transaction(() => {
       for (const t of critical) insTpl.run(t.id, t.label, t.category, t.business_types, t.description, t.html, tsTpl)
