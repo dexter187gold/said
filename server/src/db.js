@@ -14,6 +14,41 @@ if (dbPath.startsWith('/var/data')) {
 
 fs.mkdirSync(path.dirname(dbPath), { recursive: true })
 
+export function getBootstrapPath() {
+  return process.env.BOOTSTRAP_DB_PATH || path.join(__dirname, '../data/said.bootstrap.db')
+}
+
+function restoreFromBootstrapIfNeeded() {
+  const bootstrap = getBootstrapPath()
+  let need = !fs.existsSync(dbPath)
+  if (!need) {
+    try { need = fs.statSync(dbPath).size < 2048 } catch { need = true }
+  }
+  if (!need) return false
+  if (!fs.existsSync(bootstrap)) {
+    console.log('[SAID] No bootstrap DB at', bootstrap)
+    return false
+  }
+  try {
+    if (fs.statSync(bootstrap).size < 2048) {
+      console.warn('[SAID] Bootstrap file too small, skipping restore')
+      return false
+    }
+    for (const suffix of ['-wal', '-shm']) {
+      const side = dbPath + suffix
+      try { if (fs.existsSync(side)) fs.unlinkSync(side) } catch {}
+    }
+    fs.copyFileSync(bootstrap, dbPath)
+    console.log('[SAID] Restored database from bootstrap:', bootstrap)
+    return true
+  } catch (e) {
+    console.error('[SAID] Bootstrap restore failed:', e.message)
+    return false
+  }
+}
+
+restoreFromBootstrapIfNeeded()
+
 export const db = new Database(dbPath)
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
@@ -151,6 +186,14 @@ export function audit(userId, action, detail, ip) {
 }
 
 export function getDbPath() { return dbPath }
+
+export function saveBootstrapSnapshot() {
+  try { db.pragma('wal_checkpoint(TRUNCATE)') } catch {}
+  const dest = getBootstrapPath()
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  fs.copyFileSync(dbPath, dest)
+  return { from: dbPath, to: dest, size: fs.statSync(dest).size }
+}
 
 export function seedIfEmpty() {
   try { db.prepare("UPDATE users SET email_verified = 1 WHERE email = 'admin@said.local'").run() } catch {}
