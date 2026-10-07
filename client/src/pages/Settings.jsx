@@ -32,11 +32,13 @@ export default function Settings() {
   const [tab, setTab] = useState('company')
   const TABS = [
     { id: 'company', label: 'Company' },
-    { id: 'invoice', label: 'Invoice' },
+    { id: 'invoice', label: 'Invoices' },
     { id: 'tickets', label: 'Tickets' },
+    { id: 'documents', label: 'Documents' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
   ]
+  const [templates, setTemplates] = useState([])
 
   useEffect(() => {
     api('/api/v1/settings')
@@ -46,7 +48,10 @@ export default function Settings() {
       })
       .catch((e) => notify(e.message, 'error'))
     api('/api/v1/documents/templates')
-      .then((r) => setTplCount(r.total || r.data?.length || 0))
+      .then((r) => {
+        setTplCount(r.total || r.data?.length || 0)
+        setTemplates(r.data || [])
+      })
       .catch(() => {})
   }, [])
 
@@ -113,7 +118,45 @@ export default function Settings() {
         ))}
       </div>
 
-      {tab === 'appearance' && <div className="card p-4 space-y-4">
+      
+      {tab === 'documents' && (
+        <div className="space-y-4">
+          <div className="card p-4 space-y-3">
+            <h2 className="font-bold text-sm">3-way document model</h2>
+            <p className="text-xs text-slate-500">
+              <strong>Layer 1 — Layout:</strong> blank system template (structure only).<br/>
+              <strong>Layer 2 — Company:</strong> your logo, VAT, bank, address filled in automatically.<br/>
+              <strong>Layer 3 — Instance:</strong> this client, lines, dates, status for the live document.
+            </p>
+            <div>
+              <label className="label">Default invoice layout template</label>
+              <select
+                className="input"
+                value={company.invoice_template_id || 'tax_invoice_full'}
+                onChange={(e) => setC('invoice_template_id', e.target.value)}
+                disabled={!isAdmin}
+              >
+                <option value="tax_invoice_full">Tax invoice (full)</option>
+                {templates.filter((x) => /invoice|tax|quote/i.test(x.category + x.label + x.id)).map((x) => (
+                  <option key={x.id} value={x.id}>{x.label} ({x.category})</option>
+                ))}
+                {templates.length > 0 && templates.slice(0, 40).map((x) => (
+                  <option key={`all-${x.id}`} value={x.id}>{x.label}</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-slate-500 mt-1">{tplCount} templates available · used when PDF is generated</p>
+            </div>
+            <div>
+              <label className="label">Business type (filters suggested templates)</label>
+              <select className="input" value={company.business_type || 'general'} onChange={(e) => setC('business_type', e.target.value)} disabled={!isAdmin}>
+                {BUSINESS_TYPES.map((b) => <option key={b} value={b}>{b.replace(/_/g, ' ')}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+{tab === 'appearance' && <div className="card p-4 space-y-4">
         <h2 className="font-bold text-sm">Appearance (glass theme)</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div>

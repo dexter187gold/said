@@ -4,6 +4,11 @@ import { db, uid, now } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { htmlToPdf } from '../services/pdf.js'
 import { mountInvoiceExtras } from './invoiceExtras.js'
+import {
+  getDefaultTemplateId,
+  invoiceInstanceVars,
+  renderThreeWay,
+} from '../services/documentModel.js'
 
 export const invoicesRouter = Router()
 invoicesRouter.use(requireAuth)
@@ -28,6 +33,7 @@ const InvoiceBody = z.object({
   po_number: z.string().optional().nullable(),
   payment_note: z.string().optional().nullable(),
   reminder_at: z.string().optional().nullable(),
+  template_id: z.string().optional().nullable(),
   vat_rate: z.coerce.number().default(0.15),
   lines: z.array(Line).min(1),
 })
@@ -50,7 +56,11 @@ function nextNumber(docType = 'invoice') {
 
 function money(n) { return `R ${Number(n || 0).toFixed(2)}` }
 function esc(s) {
-  return String(s || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"')
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }
 
 function lineExclusive(lines) {
@@ -90,14 +100,15 @@ invoicesRouter.post('/', requireRole('staff'), (req, res, next) => {
     const id = uid()
     const number = nextNumber(body.doc_type || 'invoice')
     const date = body.date || now().slice(0, 10)
+    const tplId = body.template_id || getDefaultTemplateId(body.doc_type || 'invoice')
     db.prepare(`INSERT INTO invoices (
       id, number, client_id, date, due_date, status, notes, account_type, devices, service_type, po_number,
-      payment_note, exclusive, vat_amount, total, amount_paid, reminder_at, created_by, created_at, updated_at, doc_type
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      payment_note, exclusive, vat_amount, total, amount_paid, reminder_at, created_by, created_at, updated_at, doc_type, template_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, number, body.client_id, date, body.due_date || date, body.status,
       body.notes || null, body.account_type || null, body.devices || null, body.service_type || null,
       body.po_number || null, body.payment_note || null, exclusive, vat_amount, total, 0,
-      body.reminder_at || null, req.user.sub, now(), now(), body.doc_type || 'invoice'
+      body.reminder_at || null, req.user.sub, now(), now(), body.doc_type || 'invoice', tplId
     )
     const insLine = db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,?)`)
     for (const l of body.lines) insLine.run(uid(), id, l.description, l.qty, l.price, l.discount || 0)
@@ -114,11 +125,13 @@ invoicesRouter.put('/:id', requireRole('staff'), (req, res, next) => {
     const vat_amount = Math.round(exclusive * body.vat_rate * 100) / 100
     const total = Math.round((exclusive + vat_amount) * 100) / 100
     db.prepare(`UPDATE invoices SET client_id=?, date=?, due_date=?, status=?, notes=?, account_type=?, devices=?, service_type=?,
-      po_number=?, payment_note=?, exclusive=?, vat_amount=?, total=?, reminder_at=?, updated_at=? WHERE id=?`).run(
+      po_number=?, payment_note=?, exclusive=?, vat_amount=?, total=?, reminder_at=?, updated_at=?, template_id=? WHERE id=?`).run(
       body.client_id, body.date || existing.date, body.due_date || existing.due_date, body.status,
       body.notes || null, body.account_type || null, body.devices || null, body.service_type || null,
       body.po_number || null, body.payment_note || null, exclusive, vat_amount, total,
-      body.reminder_at || null, now(), req.params.id
+      body.reminder_at || null, now(),
+      body.template_id !== undefined ? body.template_id : existing.template_id,
+      req.params.id
     )
     db.prepare('DELETE FROM invoice_lines WHERE invoice_id = ?').run(req.params.id)
     const insLine = db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,?)`)
@@ -146,19 +159,65 @@ invoicesRouter.get('/:id/pdf', async (req, res, next) => {
   try {
     const inv = loadInvoice(req.params.id)
     if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
-    const company = db.prepare('SELECT * FROM company WHERE id = ?').get('main') || {}
-    const linesHtml = inv.lines.map((l) => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.qty * l.price)}</td></tr>`).join('')
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;font-size:12px;padding:12px}.brand{font-size:18px;font-weight:800;color:#007A4D}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{padding:8px;border-bottom:1px solid #e2e8f0;text-align:left}.grand{font-weight:800;color:#007A4D}</style></head><body>
-      <div class="brand">SA INVOICE DESK</div>
-      <p>${esc(company.name)} · ${esc(inv.number)} · ${esc(inv.date)} · ${esc(inv.status)}</p>
-      <p><strong>Bill to:</strong> ${esc(inv.client?.name)}</p>
-      <table><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Amount</th></tr></thead><tbody>${linesHtml}</tbody></table>
-      <p>Exclusive ${money(inv.exclusive)} · VAT ${money(inv.vat_amount)} · <span class="grand">Total ${money(inv.total)}</span></p>
-      <p>Paid ${money(inv.amount_paid)} · Balance ${money(Math.max(0, inv.total - inv.amount_paid))}</p>
-    </body></html>`
+    const linesHtml = inv.lines
+      .map(
+        (l) =>
+          `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.qty * l.price)}</td></tr>`
+      )
+      .join('')
+    const fallbackHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{font-family:system-ui,sans-serif;font-size:12px;padding:16px;color:#0f172a}
+.brand{font-size:18px;font-weight:800;color:#007A4D}table{width:100%;border-collapse:collapse;margin:16px 0}
+th,td{padding:8px;border-bottom:1px solid #e2e8f0;text-align:left}.grand{font-weight:800;color:#007A4D}
+.meta{color:#64748b;font-size:11px}</style></head><body>
+<div class="brand">{{company_name}}</div>
+<p class="meta">{{company_address}} · {{company_phone}} · VAT {{company_vat}}</p>
+<p><strong>{{number}}</strong> · {{date}} · {{status}}</p>
+<p><strong>Bill to:</strong> {{client_name}}<br/>{{client_address}}</p>
+<table><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Amount</th></tr></thead>
+<tbody>{{lines_html}}</tbody></table>
+<p>Exclusive {{exclusive}} · VAT {{vat_amount}} · <span class="grand">Total {{total}}</span></p>
+<p>Paid {{amount_paid}} · Balance {{balance}}</p>
+<p class="meta">{{payment_note}}</p>
+<p class="meta">{{company_bank}} · Acc {{company_account}} · Branch {{company_branch}}</p>
+</body></html>`
+    const templateId = inv.template_id || getDefaultTemplateId(inv.doc_type || 'invoice')
+    const instance = invoiceInstanceVars(inv)
+    instance.lines_html = linesHtml
+    const { html } = renderThreeWay({
+      templateId,
+      instanceVars: instance,
+      fallbackHtml,
+    })
     const pdf = await htmlToPdf(html, {})
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `inline; filename="${inv.number}.pdf"`)
     res.send(pdf)
-  } catch (e) { next(e) }
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Preview 3-way merge without saving */
+invoicesRouter.post('/preview-layout', requireRole('staff'), (req, res, next) => {
+  try {
+    const templateId = req.body?.template_id || getDefaultTemplateId('invoice')
+    const instance = req.body?.instance || {
+      number: 'PREVIEW',
+      date: new Date().toISOString().slice(0, 10),
+      status: 'unpaid',
+      client_name: 'Sample Client',
+      exclusive: 'R 0.00',
+      vat_amount: 'R 0.00',
+      total: 'R 0.00',
+      amount_paid: 'R 0.00',
+      balance: 'R 0.00',
+      lines_html: '<tr><td>Sample line</td><td>1</td><td>R 0.00</td><td>R 0.00</td></tr>',
+    }
+    const fallbackHtml = `<html><body><h1>{{company_name}}</h1><p>{{number}} — {{client_name}}</p><table>{{lines_html}}</table><p>{{total}}</p></body></html>`
+    const result = renderThreeWay({ templateId, instanceVars: instance, fallbackHtml })
+    res.json({ data: result })
+  } catch (e) {
+    next(e)
+  }
 })

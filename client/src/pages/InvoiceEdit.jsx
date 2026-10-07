@@ -30,9 +30,12 @@ export default function InvoiceEdit() {
   const [lines, setLines] = useState([{ description: '', qty: 1, price: 0 }])
   const [payAmount, setPayAmount] = useState('')
   const [loaded, setLoaded] = useState(null)
+  const [templateId, setTemplateId] = useState('')
+  const [templates, setTemplates] = useState([])
 
   useEffect(() => {
     api('/api/v1/clients').then((r) => setClients(r.data)).catch(() => {})
+    api('/api/v1/documents/templates').then((r) => setTemplates(r.data || [])).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -49,6 +52,7 @@ export default function InvoiceEdit() {
         setPoNumber(d.po_number || '')
         setPaymentNote(d.payment_note || '')
         setLines(d.lines?.length ? d.lines : [{ description: '', qty: 1, price: 0 }])
+        setTemplateId(d.template_id || '')
       })
       .catch((e) => notify(e.message, 'error'))
   }, [id, isNew])
@@ -62,6 +66,7 @@ export default function InvoiceEdit() {
   const body = () => ({
     client_id: clientId,
     doc_type: loaded?.doc_type || pathType,
+    template_id: templateId || null,
     status,
     notes,
     devices,
@@ -167,6 +172,15 @@ export default function InvoiceEdit() {
             <select className="input" required value={clientId} onChange={(e) => setClientId(e.target.value)}>
               <option value="">Select…</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Layout template (layer 1)</label>
+            <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+              <option value="">Company default</option>
+              {templates.map((x) => (
+                <option key={x.id} value={x.id}>{x.label}</option>
+              ))}
             </select>
           </div>
           <div>

@@ -163,6 +163,17 @@ export default function Shell() {
       </div>
       <HelpPanel />
       <PageSettingsSidebar open={pageSettingsOpen} onClose={() => setPageSettingsOpen(false)} />
+      {hasPageSettings && !pageSettingsOpen && (
+        <button
+          type="button"
+          aria-label="Open page settings"
+          title="Page settings (swipe from right or ])"
+          onClick={() => setPageSettingsOpen(true)}
+          className="fixed right-0 top-1/2 z-40 -translate-y-1/2 rounded-l-xl border border-r-0 border-slate-200 bg-white/95 px-1.5 py-4 text-xs shadow-lg dark:border-slate-600 dark:bg-slate-900/95"
+        >
+          ⚙
+        </button>
+      )}
     </div>
   )
 }

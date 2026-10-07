@@ -54,30 +54,32 @@ export default function PageSettingsSidebar({ open, onClose }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
-  // Swipe-from-right gesture (mobile)
+  // Swipe: right-edge → left opens page settings; left→right closes
   useEffect(() => {
     let startX = 0
     let startY = 0
+    let tracking = false
+    const EDGE = 72 // px from right edge
     const onStart = (e) => {
+      if (!e.touches || e.touches.length !== 1) return
       const t = e.touches[0]
       startX = t.clientX
       startY = t.clientY
+      tracking = startX >= window.innerWidth - EDGE || open
     }
     const onEnd = (e) => {
+      if (!tracking || !e.changedTouches?.length) return
+      tracking = false
       const t = e.changedTouches[0]
       const dx = t.clientX - startX
       const dy = t.clientY - startY
-      if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        if (dx < 0 && startX > window.innerWidth - 40) {
-          // swipe left from right edge → open
-          if (!open && page) {
-            // parent controls open; we emit via custom event
-            window.dispatchEvent(new CustomEvent('said:open-page-settings'))
-          }
-        } else if (dx > 0 && open) {
-          onClose()
-        }
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return
+      // swipe left (dx negative) from right edge → open
+      if (dx < -50 && startX >= window.innerWidth - EDGE) {
+        if (page) window.dispatchEvent(new CustomEvent('said:open-page-settings'))
       }
+      // swipe right while open → close
+      if (dx > 50 && open) onClose()
     }
     window.addEventListener('touchstart', onStart, { passive: true })
     window.addEventListener('touchend', onEnd, { passive: true })
