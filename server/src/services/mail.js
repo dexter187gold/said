@@ -1,9 +1,7 @@
 /**
  * Email delivery for OTP.
  * Env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
- * Without SMTP or nodemailer, OTP is logged (and returned as dev_otp).
  */
-
 let transporterPromise = null
 
 async function getTransporter() {
@@ -31,11 +29,13 @@ async function getTransporter() {
 
 export async function sendOtpEmail(to, code, purpose = 'verify') {
   const subject =
-    purpose === 'login'
+    purpose === 'login' || purpose === 'login_2fa'
       ? 'Your SAID login code'
-      : purpose === 'reset'
-        ? 'Reset your SAID password'
-        : 'Verify your SAID account'
+      : purpose === 'enable_2fa'
+        ? 'Enable two-factor authentication — SAID'
+        : purpose === 'reset'
+          ? 'Reset your SAID password'
+          : 'Verify your SAID account'
   const text = `Your SAID verification code is ${code}. It expires in 10 minutes.`
   const html = `<div style="font-family:system-ui,sans-serif;max-width:420px;margin:0 auto;padding:24px">
     <div style="color:#007A4D;font-weight:800;letter-spacing:.12em;font-size:12px">SA INVOICE DESK</div>
@@ -43,7 +43,6 @@ export async function sendOtpEmail(to, code, purpose = 'verify') {
     <p style="color:#475569;font-size:14px">Expires in <strong>10 minutes</strong>.</p>
     <div style="font-size:32px;font-weight:800;letter-spacing:.3em;background:#f1f5f9;padding:16px;border-radius:12px;text-align:center;margin:20px 0">${code}</div>
   </div>`
-
   const from = process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@said.local'
   const tx = await getTransporter()
   if (!tx) {
