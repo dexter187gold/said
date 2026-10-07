@@ -228,4 +228,80 @@ ticketsRouter.post('/:id/clone', requireRole('staff'), (req, res, next) => {
   } catch (e) { next(e) }
 })
 
+// EA-Q2: quick status change (Kanban drag target)
+ticketsRouter.patch('/:id/status', requireRole('staff'), (req, res, next) => {
+  try {
+    const status = z.enum(['open', 'in_progress', 'waiting', 'resolved', 'closed', 'archived']).parse(req.body?.status)
+    const existing = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id)
+    if (!existing) return res.status(404).json({ error: true, message: 'Not found' })
+    let resolved_at = existing.resolved_at
+    if (['resolved', 'closed'].includes(status) && !resolved_at) resolved_at = now()
+    if (!['resolved', 'closed'].includes(status)) resolved_at = null
+    db.prepare(`UPDATE tickets SET status=?, resolved_at=?, updated_at=? WHERE id=?`).run(
+      status,
+      resolved_at,
+      now(),
+      req.params.id
+    )
+    try {
+      db.prepare(
+        `INSERT INTO document_activity (id, document_type, document_id, user_id, action, detail, created_at)
+         VALUES (?,?,?,?,?,?,?)`
+      ).run(uid(), 'ticket', req.params.id, req.user.sub, 'status_change', status, now())
+    } catch {}
+    res.json({ data: enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id)) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// EA-Q2: bulk status update
+ticketsRouter.post('/bulk-status', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        ids: z.array(z.string()).min(1),
+        status: z.enum(['open', 'in_progress', 'waiting', 'resolved', 'closed', 'archived']),
+      })
+      .parse(req.body)
+    const ts = now()
+    const resolved_at = ['resolved', 'closed'].includes(body.status) ? ts : null
+    const stmt = db.prepare(`UPDATE tickets SET status=?, resolved_at=CASE WHEN ? IS NOT NULL THEN COALESCE(resolved_at, ?) ELSE NULL END, updated_at=? WHERE id=?`)
+    let updated = 0
+    for (const id of body.ids) {
+      const r = stmt.run(body.status, resolved_at, resolved_at, ts, id)
+      if (r.changes) updated++
+    }
+    res.json({ data: { updated, status: body.status } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// EA-Q2: recurring ticket create-from-template (simple schedule stub)
+ticketsRouter.post('/:id/schedule-recurring', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        interval_days: z.coerce.number().int().positive().default(30),
+        next_due: z.string().optional(),
+      })
+      .parse(req.body || {})
+    const src = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id)
+    if (!src) return res.status(404).json({ error: true, message: 'Not found' })
+    // Store schedule in settings-style JSON on ticket notes prefix (lightweight until full table)
+    const meta = {
+      recurring: true,
+      interval_days: body.interval_days,
+      next_due: body.next_due || new Date(Date.now() + body.interval_days * 86400000).toISOString().slice(0, 10),
+      source_id: src.id,
+    }
+    const notes = `[RECURRING ${JSON.stringify(meta)}]\n${src.notes || ''}`
+    db.prepare(`UPDATE tickets SET notes=?, is_template=1, updated_at=? WHERE id=?`).run(notes, now(), src.id)
+    res.json({ data: { ok: true, meta, ticket_id: src.id } })
+  } catch (e) {
+    next(e)
+  }
+})
+
 mountTicketTimers(ticketsRouter)

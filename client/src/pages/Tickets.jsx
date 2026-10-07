@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
 import PageHeader from '../components/PageHeader'
+import DocumentActionBar from '../components/DocumentActionBar'
 
 const STATUSES = ['open', 'in_progress', 'waiting', 'resolved', 'closed']
 const PRIOS = ['low', 'normal', 'high', 'urgent']
@@ -127,8 +128,15 @@ export default function Tickets() {
     catch (e) { notify(e.message, 'error') }
   }
   const kanbanMove = async (id, status) => {
-    try { await api(`/api/v1/tickets/${id}`, { method: 'PATCH', body: { status } }); loadList(); loadMetrics(); if (selected === id) openTicket(id); notify(`Moved to ${status.replace('_', ' ')}`) }
-    catch (e) { notify(e.message, 'error') }
+    try {
+      await api(`/api/v1/tickets/${id}/status`, { method: 'PATCH', body: { status } })
+      loadList()
+      loadMetrics()
+      if (selected === id) openTicket(id)
+      notify(`Moved to ${status.replace('_', ' ')}`)
+    } catch (e) {
+      notify(e.message, 'error')
+    }
   }
   const timerStart = async () => { try { await api(`/api/v1/tickets/${selected}/timer/start`, { method: 'POST' }); openTicket(selected); loadList(); notify('Timer started') } catch (e) { notify(e.message, 'error') } }
   const timerStop = async () => { try { const r = await api(`/api/v1/tickets/${selected}/timer/stop`, { method: 'POST' }); notify(`Logged ${fmtTime(r.data.seconds_added)}`); openTicket(selected); loadList(); loadMetrics() } catch (e) { notify(e.message, 'error') } }
@@ -147,11 +155,27 @@ export default function Tickets() {
   const billablePreview = useMemo(() => (displaySeconds / 3600) * hourlyRate, [displaySeconds, hourlyRate])
   const billInvoice = async () => {
     if (!detail?.client_id) return notify('Assign a client first', 'error')
-    if (!window.confirm(`Bill ${fmtTime(displaySeconds)} at R${hourlyRate}/hr?`)) return
+    const partsCount = (detail.parts || []).length
+    const msg = `Bill ${fmtTime(displaySeconds)} labour @ R${hourlyRate}/hr${partsCount ? ` + ${partsCount} part(s)` : ''} → invoice?`
+    if (!window.confirm(msg)) return
     setBusy(true)
-    try { const r = await api(`/api/v1/tickets/${selected}/bill`, { method: 'POST', body: { hourly_rate: hourlyRate, mark_resolved: true } }); notify(`Invoice ${r.data.number} · ${fmtMoney(r.data.total)}`); openTicket(selected); loadList(); loadMetrics() }
-    catch (e) { notify(e.message, 'error') }
-    finally { setBusy(false) }
+    try {
+      const r = await api(`/api/v1/tickets/${selected}/bill`, {
+        method: 'POST',
+        body: { hourly_rate: hourlyRate, mark_resolved: true, include_parts: true },
+      })
+      notify(
+        `Invoice ${r.data.number} · ${fmtMoney(r.data.total)}${r.data.parts_count ? ` (${r.data.parts_count} parts)` : ''}`,
+        'success'
+      )
+      openTicket(selected)
+      loadList()
+      loadMetrics()
+    } catch (e) {
+      notify(e.message, 'error')
+    } finally {
+      setBusy(false)
+    }
   }
   const printJob = async () => {
     if (!selected) return
@@ -163,10 +187,15 @@ export default function Tickets() {
       if (w) { w.document.write(html); w.document.close() }
     } catch (e) { notify(e.message, 'error') }
   }
-  const whatsappStatus = () => {
+  const whatsappStatus = async () => {
     if (!detail) return
-    const text = `SAID Job Update\n${detail.title}\nStatus: ${detail.status}\nTime: ${fmtTime(displaySeconds)}\n${detail.client_name || ''}`
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
+    try {
+      const r = await api(`/api/v1/doc-actions/ticket/${detail.id}/whatsapp-link`, { method: 'POST' })
+      window.open(r.data.url, '_blank', 'noopener')
+    } catch {
+      const text = `SAID Job Update\n${detail.title}\nStatus: ${detail.status}\nTime: ${fmtTime(displaySeconds)}\n${detail.client_name || ''}`
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
+    }
   }
   const addPartToJob = () => {
     if (!partDraft.name.trim()) return
@@ -183,7 +212,7 @@ export default function Tickets() {
 
   return (
     <div className="space-y-3">
-      <PageHeader title="Tickets & job cards" subtitle="Q1 · kanban · SLA · parts · warranty · assignees"
+      <PageHeader title="Tickets & job cards" subtitle="EA-Q2 · kanban drag · bill labour+parts · SLA · WhatsApp · actions"
         meta={[metrics ? `${metrics.open} open` : '—', metrics?.sla_breached ? `${metrics.sla_breached} SLA` : 'SLA ok', metrics?.warranty_open != null ? `${metrics.warranty_open} warranty` : '', `R${hourlyRate}/hr`]}
         actions={<div className="flex flex-wrap gap-2">
           <button type="button" className={`btn-outline !text-xs ${view === 'table' ? '!border-accent text-accent' : ''}`} onClick={() => setView('table')}>Table</button>
@@ -210,14 +239,35 @@ export default function Tickets() {
       {view === 'kanban' ? (
         <div className="flex gap-2 overflow-x-auto pb-2 min-h-[50vh]">
           {STATUSES.map((col) => (
-            <div key={col} className="card min-w-[220px] w-[240px] flex-shrink-0 p-2 flex flex-col max-h-[70vh]">
+            <div
+              key={col}
+              className="card min-w-[220px] w-[240px] flex-shrink-0 p-2 flex flex-col max-h-[70vh]"
+              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('ring-2', 'ring-accent/40') }}
+              onDragLeave={(e) => e.currentTarget.classList.remove('ring-2', 'ring-accent/40')}
+              onDrop={(e) => {
+                e.preventDefault()
+                e.currentTarget.classList.remove('ring-2', 'ring-accent/40')
+                const id = e.dataTransfer.getData('text/ticket-id')
+                if (id) kanbanMove(id, col)
+              }}
+            >
               <div className="text-[10px] uppercase font-bold text-slate-500 px-1 py-1 capitalize">{col.replace('_', ' ')} <span className="opacity-60">({list.filter((t) => t.status === col).length})</span></div>
               <div className="overflow-y-auto flex-1 space-y-1.5">
                 {list.filter((t) => t.status === col).map((t) => (
-                  <button key={t.id} type="button" onClick={() => openTicket(t.id)} className={`w-full text-left rounded-lg border border-white/10 bg-black/5 dark:bg-white/5 p-2 text-xs hover:border-accent ${selected === t.id ? 'ring-1 ring-accent' : ''}`}>
+                  <button
+                    key={t.id}
+                    type="button"
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/ticket-id', t.id)
+                      e.dataTransfer.effectAllowed = 'move'
+                    }}
+                    onClick={() => openTicket(t.id)}
+                    className={`w-full text-left rounded-lg border border-white/10 bg-black/5 dark:bg-white/5 p-2 text-xs hover:border-accent cursor-grab active:cursor-grabbing ${selected === t.id ? 'ring-1 ring-accent' : ''}`}
+                  >
                     <div className="font-semibold">{t.title}</div>
                     <div className="text-[10px] text-slate-500">{t.client_name || '—'} · {t.assignee_name || 'Unassigned'}</div>
-                    <div className="flex gap-1 mt-1"><span className={`font-semibold capitalize ${prioColor(t.priority)}`}>{t.priority}</span>{t.warranty ? <span className="text-amber-600">W</span> : null}{t.timer_started_at ? <span className="text-accent animate-pulse">●</span> : null}</div>
+                    <div className="flex gap-1 mt-1"><span className={`font-semibold capitalize ${prioColor(t.priority)}`}>{t.priority}</span>{t.warranty ? <span className="text-amber-600">W</span> : null}{t.timer_started_at ? <span className="text-accent animate-pulse">●</span> : null}{t.sla_status === 'breached' ? <span className="text-red-600">SLA!</span> : t.sla_status === 'warning' ? <span className="text-amber-500">SLA</span> : null}</div>
                     <div className="mt-1.5 flex flex-wrap gap-0.5">{STATUSES.filter((s) => s !== col).slice(0, 3).map((s) => (
                       <span key={s} role="button" className="rounded px-1 py-0.5 bg-black/5 dark:bg-white/10 text-[9px] capitalize" onClick={(e) => { e.stopPropagation(); kanbanMove(t.id, s) }}>{s.replace('_', ' ')}</span>
                     ))}</div>
@@ -254,6 +304,14 @@ export default function Tickets() {
             {!detail ? <p className="text-sm text-slate-500 p-4">Select a ticket</p> : (
               <>
                 <div><h2 className="font-bold">{detail.title}</h2><p className="text-[11px] text-slate-500">{detail.client_name || 'No client'} · {detail.assignee_name || 'Unassigned'}</p></div>
+                <DocumentActionBar
+                  type="ticket"
+                  id={detail.id}
+                  number={detail.title}
+                  status={detail.status}
+                  onRefresh={() => openTicket(detail.id)}
+                  className="!static rounded-lg border border-slate-200 dark:border-slate-700 !bg-transparent"
+                />
                 <div className="flex flex-wrap gap-1.5 text-[10px]">
                   {detail.warranty ? <span className="rounded-full bg-amber-500/15 text-amber-700 px-2 py-0.5">Warranty</span> : null}
                   {(() => { const s = slaLabel(detail.sla_due_at); return s ? <span className={`rounded-full bg-black/5 px-2 py-0.5 ${s.cls}`}>{s.text}</span> : null })()}

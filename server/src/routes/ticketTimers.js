@@ -101,6 +101,7 @@ export function mountTicketTimers(ticketsRouter) {
           vat_rate: z.coerce.number().min(0).max(1).optional(),
           note: z.string().optional().nullable(),
           mark_resolved: z.boolean().optional().default(true),
+          include_parts: z.boolean().optional().default(true),
         })
         .parse(req.body || {})
 
@@ -119,17 +120,34 @@ export function mountTicketTimers(ticketsRouter) {
       const co = db.prepare('SELECT * FROM company WHERE id=?').get('main') || {}
       const vatRate = body.vat_rate != null ? body.vat_rate : Number(co.default_vat_rate ?? 15) / 100
 
-      const secs = Number(t.time_spent_seconds || 0)
-      if (secs < 60) {
-        return res.status(400).json({ error: true, message: 'Need at least 1 minute of logged time to bill' })
+      // EA-Q2: bill labour + parts; allow parts-only billing
+      let parts = []
+      try {
+        parts = JSON.parse(t.parts_json || '[]')
+        if (!Array.isArray(parts)) parts = []
+      } catch {
+        parts = []
       }
+      const includeParts = body.include_parts !== false
+      const partsTotal = includeParts
+        ? parts.reduce((s, p) => s + Number(p.qty || 0) * Number(p.cost || 0), 0)
+        : 0
 
+      const secs = Number(t.time_spent_seconds || 0)
       const minutes = Math.ceil(secs / 60)
-      const roundedMin = Math.ceil(minutes / increment) * increment
+      const roundedMin = minutes > 0 ? Math.ceil(minutes / increment) * increment : 0
       const hours = roundedMin / 60
-      const exclusive = Math.round(hours * hourly * 100) / 100
+      const labourExclusive = Math.round(hours * hourly * 100) / 100
+      const exclusive = Math.round((labourExclusive + partsTotal) * 100) / 100
       const vat_amount = Math.round(exclusive * vatRate * 100) / 100
       const total = Math.round((exclusive + vat_amount) * 100) / 100
+
+      if (exclusive <= 0) {
+        return res.status(400).json({
+          error: true,
+          message: 'Need logged time (≥1 min) or parts with cost to bill',
+        })
+      }
 
       const y = new Date().getFullYear()
       const prefix = (co.invoice_prefix || 'INV').replace(/[^A-Z0-9]/gi, '').toUpperCase() || 'INV'
@@ -137,25 +155,75 @@ export function mountTicketTimers(ticketsRouter) {
       const number = `${prefix}-${y}-${String(c + 1).padStart(4, '0')}`
       const invId = uid()
       const date = now().slice(0, 10)
-      const desc = `Labour — ${t.title} (${roundedMin} min @ R${hourly}/hr)`
-      const notes = body.note || `Billed from ticket ${t.id.slice(0, 8)} · ${t.category || 'support'}`
+      const notes =
+        body.note ||
+        `Billed from ticket ${t.id.slice(0, 8)} · ${t.category || 'support'}${t.title ? ' · ' + t.title : ''}`
 
       db.prepare(
         `INSERT INTO invoices (
           id, number, client_id, date, due_date, status, notes, service_type, exclusive, vat_amount, total,
-          amount_paid, created_by, created_at, updated_at, doc_type
-        ) VALUES (?,?,?,?,?, 'unpaid', ?, ?, ?, ?, ?, 0, ?, ?, ?, 'invoice')`
+          amount_paid, created_by, created_at, updated_at, doc_type, converted_from_id
+        ) VALUES (?,?,?,?,?, 'unpaid', ?, ?, ?, ?, ?, 0, ?, ?, ?, 'invoice', ?)`
       ).run(
-        invId, number, t.client_id, date, date, notes, t.category || 'support',
-        exclusive, vat_amount, total, req.user.sub, now(), now()
+        invId,
+        number,
+        t.client_id,
+        date,
+        date,
+        notes,
+        t.category || 'support',
+        exclusive,
+        vat_amount,
+        total,
+        req.user.sub,
+        now(),
+        now(),
+        t.id
       )
 
-      db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price) VALUES (?,?,?,?,?)`).run(
-        uid(), invId, desc, hours, hourly
-      )
+      if (hours > 0) {
+        const desc = `Labour — ${t.title} (${roundedMin} min @ R${hourly}/hr)`
+        db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price) VALUES (?,?,?,?,?)`).run(
+          uid(),
+          invId,
+          desc,
+          hours,
+          hourly
+        )
+      }
+      if (includeParts) {
+        for (const p of parts) {
+          const qty = Number(p.qty) || 1
+          const price = Number(p.cost) || 0
+          if (price <= 0 && qty <= 0) continue
+          db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price) VALUES (?,?,?,?,?)`).run(
+            uid(),
+            invId,
+            `Part — ${p.name || 'Item'}`,
+            qty,
+            price
+          )
+        }
+      }
+
+      // Activity log
+      try {
+        db.prepare(
+          `INSERT INTO document_activity (id, document_type, document_id, user_id, action, detail, created_at)
+           VALUES (?,?,?,?,?,?,?)`
+        ).run(uid(), 'ticket', t.id, req.user.sub, 'billed', `invoice ${number}`, now())
+        db.prepare(
+          `INSERT INTO document_activity (id, document_type, document_id, user_id, action, detail, created_at)
+           VALUES (?,?,?,?,?,?,?)`
+        ).run(uid(), 'invoice', invId, req.user.sub, 'created_from_ticket', t.id, now())
+      } catch {}
 
       if (body.mark_resolved !== false) {
-        db.prepare(`UPDATE tickets SET status='resolved', resolved_at=?, updated_at=? WHERE id=?`).run(now(), now(), t.id)
+        db.prepare(`UPDATE tickets SET status='resolved', resolved_at=?, updated_at=? WHERE id=?`).run(
+          now(),
+          now(),
+          t.id
+        )
       }
 
       res.status(201).json({
@@ -165,6 +233,8 @@ export function mountTicketTimers(ticketsRouter) {
           hours,
           minutes: roundedMin,
           hourly_rate: hourly,
+          parts_count: includeParts ? parts.length : 0,
+          parts_total: partsTotal,
           exclusive,
           vat_amount,
           total,
