@@ -1,8 +1,10 @@
-# SAID roadmap — 4 quarterly update pushes
+# SAID quarterly roadmap pointer
 
-## Q1 — Tickets & field service ✅
-## Q2 — Invoicing + Clients ✅
-## Q3 — Documents + Dashboard ✅
-## Q4 — Auth, mobile, platform, SA fit ✅
+**Current master plan:** [ROADMAP_v2.md](./ROADMAP_v2.md) — **400 updates** in **2 pushes**.
 
-Email 2FA · password change · audit log · security headers · POPIA export · PWA · Docker · SQLite backup · EN/AF/ZU i18n.
+| Push | File |
+|------|------|
+| Update 1 (Q1+Q2, items 1–200) | [ROADMAP_v2_UPDATE1_Q1_Q2.md](./ROADMAP_v2_UPDATE1_Q1_Q2.md) |
+| Update 2 (Q3+Q4, items 201–400) | [ROADMAP_v2_UPDATE2_Q3_Q4.md](./ROADMAP_v2_UPDATE2_Q3_Q4.md) |
+
+Historical v1 notes remain in older commits; use v2 for planning.
