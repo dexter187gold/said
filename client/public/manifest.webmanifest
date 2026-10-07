@@ -1,0 +1,19 @@
+{
+  "name": "SA Invoice Desk",
+  "short_name": "SAID",
+  "description": "Invoices, tickets, and documents for SA SMEs",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#007A4D",
+  "lang": "en-ZA",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
