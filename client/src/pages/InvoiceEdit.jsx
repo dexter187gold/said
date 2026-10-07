@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
+import DocumentActionBar from '../components/DocumentActionBar'
 
 export default function InvoiceEdit() {
   const { id } = useParams()
@@ -130,6 +131,20 @@ export default function InvoiceEdit() {
           {!isNew && <button type="button" className="btn-outline" onClick={pdf}>PDF</button>}
         </div>
       </div>
+
+      {!isNew && (
+        <DocumentActionBar
+          type={pathType}
+          id={id}
+          number={loaded?.number}
+          status={status}
+          onRefresh={(newId) => {
+            if (newId) nav(`/${pathType === 'invoice' ? 'invoices' : pathType === 'quote' ? 'quotes' : 'credits'}/${newId}`)
+            else window.location.reload()
+          }}
+          className="mb-4 rounded-xl border border-slate-200 dark:border-slate-700"
+        />
+      )}
 
       <div className="mb-4 grid gap-3 sm:grid-cols-4">
         {[

@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import AppLogo from './AppLogo'
 import HelpPanel from './HelpPanel'
+import PageSettingsSidebar, { usePageSettings } from './PageSettingsSidebar'
 
 const links = [
   { to: '/', label: 'Dashboard', end: true, icon: '⌂' },
@@ -31,6 +32,7 @@ export default function Shell() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const touchRef = useRef({ x: 0, y: 0, t: 0, active: false, taps: 0 })
   const mainRef = useRef(null)
+  const { open: pageSettingsOpen, setOpen: setPageSettingsOpen, hasPageSettings } = usePageSettings()
 
   const persist = useCallback((v) => {
     setCollapsed(v)
@@ -82,7 +84,7 @@ export default function Shell() {
     const onKey = (e) => {
       if (e.target.matches('input,textarea,select')) return
       if (e.key === '[') persist(true)
-      if (e.key === ']') persist(false)
+      // ] is reserved for page settings sidebar (usePageSettings)
       if (e.key === 'g' || e.key === 'G') setPrefs({ style: prefs.style === 'glass' ? 'solid' : 'glass' })
     }
     window.addEventListener('keydown', onKey)
@@ -135,6 +137,16 @@ export default function Shell() {
         <header className="sticky top-0 z-30 flex items-center gap-3 glass-panel border-b border-white/20 dark:border-white/10 px-3 py-2 md:px-5 shrink-0 rounded-none">
           <button type="button" className="md:hidden btn-ghost !px-2.5 !py-1.5 text-lg" onClick={() => setMobileOpen(true)}>☰</button>
           <div className="min-w-0 flex-1 text-xs text-slate-500 truncate">{user?.name || 'User'} · {new Date().toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
+          {hasPageSettings && (
+            <button
+              type="button"
+              className="btn-outline !py-1 !px-2.5 !text-xs"
+              title="Page settings ( ] or Ctrl+, )"
+              onClick={() => setPageSettingsOpen(true)}
+            >
+              ⚙ Page
+            </button>
+          )}
           <button type="button" className="hidden sm:inline-flex btn-outline !py-1 !px-2.5 !text-xs" onClick={() => persist(!collapsed)}>{collapsed ? 'Show menu' : 'Hide menu'}</button>
         </header>
         <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-full">
@@ -143,12 +155,13 @@ export default function Shell() {
           </div>
         </main>
         <footer className="shrink-0 border-t border-white/10 px-4 py-2 text-[10px] text-slate-400 flex flex-wrap gap-x-3 gap-y-1 glass-panel rounded-none">
-          <span>SAID v1.5</span>
+          <span>SAID v1.6 Expert</span>
           <NavLink to="/about" className="hover:text-accent">About</NavLink>
           <NavLink to="/settings" className="hover:text-accent">Theme</NavLink>
         </footer>
       </div>
       <HelpPanel />
+      <PageSettingsSidebar open={pageSettingsOpen} onClose={() => setPageSettingsOpen(false)} />
     </div>
   )
 }

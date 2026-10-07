@@ -11,6 +11,8 @@ import { invoicesRouter } from './routes/invoices.js'
 import { ticketsRouter } from './routes/tickets.js'
 import { documentsRouter } from './routes/documents.js'
 import { settingsRouter } from './routes/settings.js'
+import { pagePrefsRouter } from './routes/pagePrefs.js'
+import { documentActionsRouter } from './routes/documentActions.js'
 import { errorHandler, notFound } from './middleware/error.js'
 import { requireAuth } from './middleware/auth.js'
 
@@ -34,7 +36,7 @@ app.use((req, res, next) => {
 
 app.get('/api/v1/health', (_req, res) => {
   const tplCount = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
-  res.json({ ok: true, service: 'said', version: '1.5.0', templates: tplCount })
+  res.json({ ok: true, service: 'said', version: '1.6.0-expert', templates: tplCount })
 })
 
 app.get('/api/v1/company', requireAuth, (_req, res) => {
@@ -55,6 +57,8 @@ app.use('/api/v1/invoices', invoicesRouter)
 app.use('/api/v1/tickets', ticketsRouter)
 app.use('/api/v1/documents', documentsRouter)
 app.use('/api/v1/settings', settingsRouter)
+app.use('/api/v1/page-prefs', pagePrefsRouter)
+app.use('/api/v1/doc-actions', documentActionsRouter)
 
 const clientDist = path.join(__dirname, '../../client/dist')
 if (fs.existsSync(clientDist)) {

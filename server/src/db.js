@@ -125,6 +125,30 @@ CREATE TABLE IF NOT EXISTS audit_log (
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)`) } catch {}
 
+// Expert / Advanced — page-scoped preferences + document activity (EA-Q1)
+try {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS page_preferences (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  page_key TEXT NOT NULL,
+  prefs TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_page_prefs_user_page ON page_preferences(user_id, page_key);
+CREATE TABLE IF NOT EXISTS document_activity (
+  id TEXT PRIMARY KEY,
+  document_type TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  user_id TEXT,
+  action TEXT NOT NULL,
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_doc_activity_doc ON document_activity(document_type, document_id);
+`)
+} catch (e) { console.warn('page_prefs / document_activity tables', e.message) }
+
 const ticketCols = db.prepare(`PRAGMA table_info(tickets)`).all().map((c) => c.name)
 for (const [col, def] of [
   ['description', 'TEXT'], ['tags', 'TEXT'], ['due_date', 'TEXT'],
