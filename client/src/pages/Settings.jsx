@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
+import { useI18n } from '../context/I18nContext'
 import { useTheme } from '../context/ThemeContext'
 import PageHeader from '../components/PageHeader'
 
@@ -14,6 +15,7 @@ const ACCENTS = ['#007A4D', '#0ea5e9', '#8b5cf6', '#f59e0b', '#ef4444', '#ec4899
 
 export default function Settings() {
   const { notify, user } = useAuth()
+  const { locale, setLocale, t } = useI18n()
   const { prefs, setPrefs, reset } = useTheme()
   const isAdmin = user?.role === 'owner' || user?.role === 'admin'
   const [company, setCompany] = useState({})
@@ -26,6 +28,7 @@ export default function Settings() {
   })
   const [tplCount, setTplCount] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [sec, setSec] = useState({ current: '', next: '', otp: '', busy: false })
 
   useEffect(() => {
     api('/api/v1/settings')
@@ -69,12 +72,19 @@ export default function Settings() {
 
   const setC = (k, v) => setCompany({ ...company, [k]: v })
   const setS = (k, v) => setSettings({ ...settings, [k]: v })
+  const onLogo = (file) => {
+    if (!file || !isAdmin) return
+    if (file.size > 800_000) return notify('Logo max ~800KB', 'error')
+    const reader = new FileReader()
+    reader.onload = () => setC('logo_url', reader.result)
+    reader.readAsDataURL(file)
+  }
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Settings"
-        subtitle="Company · invoice preferences · tickets · appearance"
+        title={t('settings')}
+        subtitle="Company · invoice · tickets · security · appearance"
         meta={[`${tplCount} templates`, prefs.style, `R${settings.hourly_rate || 450}/hr`]}
       />
 
@@ -121,7 +131,6 @@ export default function Settings() {
       <form className="space-y-4" onSubmit={save}>
         <div className="card p-4 space-y-3">
           <h2 className="font-bold text-sm">Invoice preferences</h2>
-          <p className="text-xs text-slate-500">Used when billing ticket hours to an invoice</p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <label className="label">Hourly labour rate (ZAR)</label>
@@ -176,6 +185,22 @@ export default function Settings() {
 
         <div className="card p-4 space-y-3">
           <h2 className="font-bold text-sm">Company profile</h2>
+          <div className="flex flex-wrap items-center gap-3">
+            {company.logo_url ? (
+              <img src={company.logo_url} alt="Logo" className="h-14 max-w-[160px] object-contain rounded-lg border border-white/10 bg-white/50 p-1" />
+            ) : (
+              <div className="h-14 w-28 rounded-lg border border-dashed border-slate-300 grid place-items-center text-[10px] text-slate-400">No logo</div>
+            )}
+            <div>
+              <label className="label">Logo upload</label>
+              <input type="file" accept="image/*" className="text-xs" disabled={!isAdmin}
+                onChange={(e) => onLogo(e.target.files?.[0])} />
+              <p className="text-[10px] text-slate-500 mt-0.5">PNG/JPG · max ~800KB · used on docs</p>
+              {company.logo_url && isAdmin && (
+                <button type="button" className="btn-ghost !text-[10px] !px-1" onClick={() => setC('logo_url', '')}>Remove</button>
+              )}
+            </div>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {[['name', 'Company name'], ['email', 'Email'], ['phone', 'Phone'], ['vat_number', 'VAT number'],
               ['address', 'Address'], ['website', 'Website'], ['bank_name', 'Bank name'],
@@ -200,6 +225,79 @@ export default function Settings() {
         )}
         {!isAdmin && <p className="text-xs text-amber-600">Sign in as admin to edit company & rates.</p>}
       </form>
+
+      <div className="card p-4 space-y-3">
+        <h2 className="font-bold text-sm">Security & privacy (Q4)</h2>
+        <p className="text-xs text-slate-500">2FA · password · POPIA export · database backup · language</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label">{t('language')}</label>
+            <select className="input" value={locale} onChange={(e) => setLocale(e.target.value)}>
+              <option value="en">English</option>
+              <option value="af">Afrikaans</option>
+              <option value="zu">isiZulu</option>
+            </select>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <button type="button" className="btn-outline !text-xs" disabled={sec.busy} onClick={async () => {
+              setSec((s) => ({ ...s, busy: true }))
+              try {
+                const r = await api('/api/v1/auth/2fa/enable', { method: 'POST' })
+                setSec((s) => ({ ...s, otp: '', busy: false }))
+                if (r.data?.dev_otp) notify(`Dev OTP: ${r.data.dev_otp}`)
+                else notify('OTP sent to your email')
+              } catch (e) { notify(e.message, 'error'); setSec((s) => ({ ...s, busy: false })) }
+            }}>Enable 2FA (email OTP)</button>
+            <button type="button" className="btn-ghost !text-xs" onClick={async () => {
+              try {
+                await api('/api/v1/auth/2fa/confirm', { method: 'POST', body: { code: sec.otp || '000000', enable: false } })
+                notify('2FA disabled')
+              } catch (e) { notify(e.message, 'error') }
+            }}>Disable 2FA</button>
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <input className="input" placeholder="OTP to confirm 2FA enable" value={sec.otp} onChange={(e) => setSec({ ...sec, otp: e.target.value })} />
+          <button type="button" className="btn-primary !text-xs" onClick={async () => {
+            try {
+              await api('/api/v1/auth/2fa/confirm', { method: 'POST', body: { code: sec.otp, enable: true } })
+              notify('2FA enabled')
+            } catch (e) { notify(e.message, 'error') }
+          }}>Confirm enable</button>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <input className="input" type="password" placeholder="Current password" value={sec.current} onChange={(e) => setSec({ ...sec, current: e.target.value })} />
+          <input className="input" type="password" placeholder="New password" value={sec.next} onChange={(e) => setSec({ ...sec, next: e.target.value })} />
+          <button type="button" className="btn-outline !text-xs" onClick={async () => {
+            try {
+              await api('/api/v1/auth/password', { method: 'POST', body: { current: sec.current, next: sec.next } })
+              notify('Password updated')
+              setSec((s) => ({ ...s, current: '', next: '' }))
+            } catch (e) { notify(e.message, 'error') }
+          }}>Change password</button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn-outline !text-xs" onClick={async () => {
+            try {
+              const res = await api('/api/v1/auth/me/export', { raw: true })
+              const blob = await res.blob()
+              const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'said-popia-export.json'; a.click()
+              notify(t('popia_export'))
+            } catch (e) { notify(e.message, 'error') }
+          }}>{t('popia_export')}</button>
+          {isAdmin && (
+            <button type="button" className="btn-outline !text-xs" onClick={async () => {
+              try {
+                const res = await api('/api/v1/auth/backup', { raw: true })
+                if (!res.ok) throw new Error('Backup failed')
+                const blob = await res.blob()
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'said-backup.db'; a.click()
+                notify(t('backup'))
+              } catch (e) { notify(e.message, 'error') }
+            }}>{t('backup')}</button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
