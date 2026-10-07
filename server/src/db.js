@@ -82,22 +82,20 @@ CREATE TABLE IF NOT EXISTS otp_codes (
   purpose TEXT NOT NULL DEFAULT 'register', attempts INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, detail TEXT, ip TEXT, created_at TEXT NOT NULL
+);
 `)
 
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email)`) } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)`) } catch {}
 
 const ticketCols = db.prepare(`PRAGMA table_info(tickets)`).all().map((c) => c.name)
-if (!ticketCols.includes('description')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN description TEXT`) } catch {} }
-if (!ticketCols.includes('tags')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN tags TEXT`) } catch {} }
-if (!ticketCols.includes('due_date')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN due_date TEXT`) } catch {} }
-if (!ticketCols.includes('time_spent_seconds')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN time_spent_seconds INTEGER NOT NULL DEFAULT 0`) } catch {} }
-if (!ticketCols.includes('timer_started_at')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN timer_started_at TEXT`) } catch {} }
-if (!ticketCols.includes('estimated_minutes')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN estimated_minutes INTEGER`) } catch {} }
 for (const [col, def] of [
-  ['warranty', 'INTEGER NOT NULL DEFAULT 0'],
-  ['sla_hours', 'INTEGER'],
-  ['sla_due_at', 'TEXT'],
-  ['parts_json', 'TEXT'],
+  ['description', 'TEXT'], ['tags', 'TEXT'], ['due_date', 'TEXT'],
+  ['time_spent_seconds', 'INTEGER NOT NULL DEFAULT 0'], ['timer_started_at', 'TEXT'],
+  ['estimated_minutes', 'INTEGER'], ['warranty', 'INTEGER NOT NULL DEFAULT 0'],
+  ['sla_hours', 'INTEGER'], ['sla_due_at', 'TEXT'], ['parts_json', 'TEXT'],
   ['is_template', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   if (!ticketCols.includes(col)) { try { db.exec(`ALTER TABLE tickets ADD COLUMN ${col} ${def}`) } catch {} }
@@ -113,21 +111,21 @@ for (const [col, def] of [
   if (!companyCols.includes(col)) { try { db.exec(`ALTER TABLE company ADD COLUMN ${col} ${def}`) } catch {} }
 }
 
-const tplCols = db.prepare(`PRAGMA table_info(document_templates)`).all().map((c) => c.name)
-for (const [col, def] of [
-  ['category', "TEXT DEFAULT 'General'"], ['business_types', "TEXT DEFAULT 'all'"],
-  ['description', 'TEXT'], ['is_system', 'INTEGER NOT NULL DEFAULT 1'], ['updated_at', 'TEXT'],
-]) {
-  if (!tplCols.includes(col)) { try { db.exec(`ALTER TABLE document_templates ADD COLUMN ${col} ${def}`) } catch {} }
-}
-
 const invCols = db.prepare(`PRAGMA table_info(invoices)`).all().map((c) => c.name)
 if (!invCols.includes('template_id')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN template_id TEXT`) } catch {} }
 if (!invCols.includes('doc_type')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'invoice'`) } catch {} }
+if (!invCols.includes('converted_from_id')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN converted_from_id TEXT`) } catch {} }
+
+const lineCols = db.prepare(`PRAGMA table_info(invoice_lines)`).all().map((c) => c.name)
+if (!lineCols.includes('discount')) { try { db.exec(`ALTER TABLE invoice_lines ADD COLUMN discount REAL NOT NULL DEFAULT 0`) } catch {} }
 
 const clientCols = db.prepare(`PRAGMA table_info(clients)`).all().map((c) => c.name)
-if (!clientCols.includes('vat_number')) { try { db.exec(`ALTER TABLE clients ADD COLUMN vat_number TEXT`) } catch {} }
-if (!clientCols.includes('notes')) { try { db.exec(`ALTER TABLE clients ADD COLUMN notes TEXT`) } catch {} }
+for (const [col, def] of [
+  ['vat_number', 'TEXT'], ['notes', 'TEXT'], ['tags', 'TEXT'], ['credit_limit', 'REAL'],
+  ['contacts_json', 'TEXT'],
+]) {
+  if (!clientCols.includes(col)) { try { db.exec(`ALTER TABLE clients ADD COLUMN ${col} ${def}`) } catch {} }
+}
 
 const userCols = db.prepare(`PRAGMA table_info(users)`).all().map((c) => c.name)
 for (const [col, def] of [
@@ -135,12 +133,24 @@ for (const [col, def] of [
   ['oauth_provider', 'TEXT'],
   ['oauth_id', 'TEXT'],
   ['phone', 'TEXT'],
+  ['two_fa_enabled', 'INTEGER NOT NULL DEFAULT 0'],
+  ['last_login_at', 'TEXT'],
+  ['locale', "TEXT NOT NULL DEFAULT 'en'"],
 ]) {
   if (!userCols.includes(col)) { try { db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`) } catch {} }
 }
 
 export function uid() { return crypto.randomUUID() }
 export function now() { return new Date().toISOString() }
+
+export function audit(userId, action, detail, ip) {
+  try {
+    db.prepare(`INSERT INTO audit_log (id, user_id, action, detail, ip, created_at) VALUES (?,?,?,?,?,?)`)
+      .run(uid(), userId || null, action, detail ? String(detail).slice(0, 2000) : null, ip || null, now())
+  } catch (e) { console.warn('audit', e.message) }
+}
+
+export function getDbPath() { return dbPath }
 
 export function seedIfEmpty() {
   try { db.prepare("UPDATE users SET email_verified = 1 WHERE email = 'admin@said.local'").run() } catch {}
