@@ -94,7 +94,7 @@ documentsRouter.delete('/templates/:id', requireRole('admin'), (req, res) => {
   res.json({ ok: true })
 })
 
-documentsRouter.post('/render', requireRole('staff'), async (req, res, next) => {
+documentsRouter.post('/render', async (req, res, next) => {
   try {
     const body = z.object({
       template_id: z.string().min(1),
@@ -103,6 +103,7 @@ documentsRouter.post('/render', requireRole('staff'), async (req, res, next) => 
     }).parse(req.body)
     const tpl = db.prepare('SELECT * FROM document_templates WHERE id = ?').get(body.template_id)
     if (!tpl) return res.status(404).json({ error: true, message: 'Template not found' })
+    if (!tpl.html || tpl.html.length < 10) return res.status(400).json({ error: true, message: 'Template has no HTML content' })
     const vars = {}
     for (const [k, v] of Object.entries(body.variables)) vars[k] = v == null ? '' : String(v)
     const co = db.prepare('SELECT * FROM company WHERE id=?').get('main') || {}
@@ -120,10 +121,17 @@ documentsRouter.post('/render', requireRole('staff'), async (req, res, next) => 
     if (body.format === 'html') {
       return res.json({ data: { id: renderId, html: fill(tpl.html, vars) } })
     }
-    const pdf = await htmlToPdf(tpl.html, vars)
-    res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader('Content-Disposition', `inline; filename="${body.template_id}.pdf"`)
-    res.send(pdf)
+    try {
+      const pdf = await htmlToPdf(tpl.html, vars)
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader('Content-Disposition', `attachment; filename="${body.template_id}.pdf"`)
+      return res.send(pdf)
+    } catch (pdfErr) {
+      console.error('PDF render error:', pdfErr)
+      const err = new Error(pdfErr.message || 'PDF generation failed')
+      err.status = 503
+      throw err
+    }
   } catch (e) {
     next(e)
   }
