@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { db, uid, now } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { htmlToPdf, fill } from '../services/pdf.js'
+import { TEMPLATE_SEED } from '../seedTemplates.js'
 
 export const documentsRouter = Router()
 documentsRouter.use(requireAuth)
@@ -132,6 +133,26 @@ documentsRouter.post('/render', async (req, res, next) => {
       err.status = 503
       throw err
     }
+  } catch (e) {
+    next(e)
+  }
+})
+
+documentsRouter.post('/reseed', requireRole('admin'), (req, res, next) => {
+  try {
+    const ins = db.prepare(
+      `INSERT OR REPLACE INTO document_templates (id, label, category, business_types, description, html, is_system, updated_at)
+       VALUES (?,?,?,?,?,?,1,?)`
+    )
+    const ts = now()
+    const tx = db.transaction(() => {
+      for (const t of TEMPLATE_SEED) {
+        ins.run(t.id, t.label, t.category, t.business_types, t.description || null, t.html, ts)
+      }
+    })
+    tx()
+    const count = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
+    res.json({ ok: true, count })
   } catch (e) {
     next(e)
   }
