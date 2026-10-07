@@ -1,45 +1,69 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState, useRef, useMemo } from 'react'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
+import PageHeader from '../components/PageHeader'
 
 const STATUSES = ['open', 'in_progress', 'waiting', 'resolved', 'closed']
 const PRIOS = ['low', 'normal', 'high', 'urgent']
-const CATS = ['support', 'repair', 'install', 'billing', 'sales', 'other']
+const CATS = ['support', 'repair', 'install', 'onsite', 'remote', 'billing', 'sales', 'jobcard', 'other']
 
 function fmtTime(sec) {
   const s = Math.max(0, Math.floor(sec || 0))
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
-  if (h > 0) return `${h}h ${m}m ${r}s`
-  if (m > 0) return `${m}m ${r}s`
-  return `${r}s`
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const r = s % 60
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m ${String(r).padStart(2, '0')}s`
+  return `${m}m ${String(r).padStart(2, '0')}s`
+}
+function fmtMoney(n) {
+  return `R ${Number(n || 0).toFixed(2)}`
+}
+
+const emptyJob = {
+  title: '', description: '', priority: 'normal', category: 'repair', status: 'open',
+  client_id: '', tags: '', due_date: '', estimated_minutes: '', notes: '',
+  site_address: '', device_info: '', serial_numbers: '', reported_by: '',
+  fault_reported: '', work_done: '',
 }
 
 export default function Tickets() {
-  const { notify, user } = useAuth()
+  const { notify } = useAuth()
   const [list, setList] = useState([])
   const [metrics, setMetrics] = useState(null)
+  const [clients, setClients] = useState([])
+  const [hourlyRate, setHourlyRate] = useState(450)
   const [selected, setSelected] = useState(null)
   const [detail, setDetail] = useState(null)
-  const [form, setForm] = useState({ title: '', priority: 'normal', category: 'support', description: '' })
+  const [showJobcard, setShowJobcard] = useState(false)
+  const [job, setJob] = useState(emptyJob)
   const [comment, setComment] = useState('')
   const [internal, setInternal] = useState(false)
   const [manualMin, setManualMin] = useState('')
-  const [filter, setFilter] = useState({ status: '', q: '' })
+  const [filter, setFilter] = useState({ status: '', priority: '', category: '', q: '' })
   const [liveTimer, setLiveTimer] = useState(0)
+  const [busy, setBusy] = useState(false)
   const tickRef = useRef(null)
 
   const loadList = () => {
     const params = new URLSearchParams()
     if (filter.status) params.set('status', filter.status)
+    if (filter.priority) params.set('priority', filter.priority)
+    if (filter.category) params.set('category', filter.category)
     if (filter.q) params.set('q', filter.q)
     const qs = params.toString() ? `?${params}` : ''
-    return api(`/api/v1/tickets${qs}`).then((r) => setList(r.data)).catch((e) => notify(e.message, 'error'))
+    return api(`/api/v1/tickets${qs}`).then((r) => setList(r.data || [])).catch((e) => notify(e.message, 'error'))
   }
+  const loadMetrics = () => api('/api/v1/tickets/metrics').then((r) => setMetrics(r.data)).catch(() => {})
 
   useEffect(() => {
     loadList()
-    api('/api/v1/tickets/metrics').then((r) => setMetrics(r.data)).catch(() => {})
-  }, [filter.status])
+    loadMetrics()
+    api('/api/v1/clients').then((r) => setClients(r.data || [])).catch(() => {})
+    api('/api/v1/settings').then((r) => {
+      const hr = r.data?.settings?.hourly_rate
+      if (hr != null) setHourlyRate(Number(hr) || 450)
+    }).catch(() => {})
+  }, [filter.status, filter.priority, filter.category])
 
   useEffect(() => {
     if (detail?.timer_started_at) {
@@ -61,239 +85,305 @@ export default function Tickets() {
     } catch (e) { notify(e.message, 'error') }
   }
 
-  const create = async (e) => {
+  const setJ = (k, v) => setJob((j) => ({ ...j, [k]: v }))
+
+  const createJobcard = async (e) => {
     e.preventDefault()
+    if (!job.title.trim()) return notify('Job title required', 'error')
+    setBusy(true)
     try {
-      const r = await api('/api/v1/tickets', { method: 'POST', body: { ...form, status: 'open' } })
-      setForm({ title: '', priority: 'normal', category: 'support', description: '' })
-      notify('Ticket created')
+      const description = [
+        job.fault_reported && `Fault reported: ${job.fault_reported}`,
+        job.device_info && `Device: ${job.device_info}`,
+        job.serial_numbers && `Serials: ${job.serial_numbers}`,
+        job.site_address && `Site: ${job.site_address}`,
+        job.reported_by && `Reported by: ${job.reported_by}`,
+        job.description,
+        job.work_done && `Work done: ${job.work_done}`,
+      ].filter(Boolean).join('\n')
+      const r = await api('/api/v1/tickets', {
+        method: 'POST',
+        body: {
+          title: job.title.trim(),
+          description: description || null,
+          priority: job.priority,
+          category: job.category,
+          status: job.status,
+          client_id: job.client_id || null,
+          tags: job.tags || null,
+          due_date: job.due_date || null,
+          estimated_minutes: job.estimated_minutes ? Number(job.estimated_minutes) : null,
+          notes: job.notes || null,
+        },
+      })
+      notify('Job card created')
+      setShowJobcard(false)
+      setJob(emptyJob)
       await loadList()
+      loadMetrics()
       openTicket(r.data.id)
     } catch (err) { notify(err.message, 'error') }
+    finally { setBusy(false) }
   }
 
-  const setStatus = async (status) => {
+  const patchStatus = async (status) => {
+    if (!selected) return
     try {
       await api(`/api/v1/tickets/${selected}`, { method: 'PATCH', body: { status } })
-      notify('Updated')
-      await loadList()
-      openTicket(selected)
+      openTicket(selected); loadList(); loadMetrics()
     } catch (e) { notify(e.message, 'error') }
   }
 
-  const saveMeta = async (patch) => {
-    try {
-      await api(`/api/v1/tickets/${selected}`, { method: 'PATCH', body: patch })
-      openTicket(selected)
-      loadList()
-    } catch (e) { notify(e.message, 'error') }
-  }
-
-  const postComment = async (e) => {
-    e.preventDefault()
-    try {
-      await api(`/api/v1/tickets/${selected}/comments`, { method: 'POST', body: { text: comment, internal } })
-      setComment('')
-      openTicket(selected)
-    } catch (err) { notify(err.message, 'error') }
-  }
-
-  const startTimer = async () => {
+  const timerStart = async () => {
     try {
       await api(`/api/v1/tickets/${selected}/timer/start`, { method: 'POST' })
-      notify('Timer started')
-      openTicket(selected)
-      loadList()
+      openTicket(selected); loadList(); notify('Timer started')
     } catch (e) { notify(e.message, 'error') }
   }
-
-  const stopTimer = async () => {
+  const timerStop = async () => {
     try {
       const r = await api(`/api/v1/tickets/${selected}/timer/stop`, { method: 'POST' })
       notify(`Logged ${fmtTime(r.data.seconds_added)}`)
-      openTicket(selected)
-      loadList()
+      openTicket(selected); loadList(); loadMetrics()
     } catch (e) { notify(e.message, 'error') }
   }
-
-  const logManual = async () => {
-    const mins = parseFloat(manualMin)
+  const addManual = async () => {
+    const mins = Number(manualMin)
     if (!mins || mins <= 0) return notify('Enter minutes', 'error')
     try {
       await api(`/api/v1/tickets/${selected}/time`, { method: 'POST', body: { seconds: Math.round(mins * 60), note: 'Manual log' } })
-      setManualMin('')
-      notify('Time logged')
-      openTicket(selected)
-      loadList()
+      setManualMin(''); openTicket(selected); loadList(); notify('Time logged')
+    } catch (e) { notify(e.message, 'error') }
+  }
+  const addComment = async () => {
+    if (!comment.trim()) return
+    try {
+      await api(`/api/v1/tickets/${selected}/comments`, { method: 'POST', body: { text: comment, internal } })
+      setComment(''); openTicket(selected)
     } catch (e) { notify(e.message, 'error') }
   }
 
-  const prioClass = (p) =>
-    p === 'urgent' ? 'bg-red-100 text-red-700' : p === 'high' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
+  const displaySeconds = useMemo(() => {
+    if (!detail) return 0
+    return (detail.time_spent_seconds || 0) + (detail.timer_started_at ? liveTimer : 0)
+  }, [detail, liveTimer])
+  const billablePreview = useMemo(() => (displaySeconds / 3600) * hourlyRate, [displaySeconds, hourlyRate])
+
+  const billInvoice = async () => {
+    if (!detail?.client_id) return notify('Assign a client on this ticket first', 'error')
+    if (!window.confirm(`Bill ${fmtTime(displaySeconds)} at R${hourlyRate}/hr to invoice?`)) return
+    setBusy(true)
+    try {
+      const r = await api(`/api/v1/tickets/${selected}/bill`, { method: 'POST', body: { hourly_rate: hourlyRate, mark_resolved: true } })
+      notify(`Invoice ${r.data.number} · ${fmtMoney(r.data.total)}`)
+      openTicket(selected); loadList(); loadMetrics()
+    } catch (e) { notify(e.message, 'error') }
+    finally { setBusy(false) }
+  }
+
+  const prioColor = (p) => ({ urgent: 'text-red-600', high: 'text-orange-600', normal: 'text-slate-600', low: 'text-slate-400' }[p] || '')
 
   return (
-    <div>
-      <h1 className="text-2xl font-extrabold">Tickets desk</h1>
-      <p className="text-sm text-slate-500">Timer · descriptions · categories · time tracking</p>
+    <div className="space-y-3">
+      <PageHeader
+        title="Tickets & job cards"
+        subtitle="Live board · timers · bill labour to invoice"
+        meta={[metrics ? `${metrics.open} open` : '—', metrics ? `${metrics.urgent} urgent` : '—', metrics ? `${metrics.total_time_hours}h logged` : '—', `R${hourlyRate}/hr`]}
+        actions={<button type="button" className="btn-primary" onClick={() => setShowJobcard(true)}>+ New job card</button>}
+      />
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        {[
-          ['Open', metrics?.open],
-          ['Urgent', metrics?.urgent],
-          ['Resolved', metrics?.resolved],
-          ['Time logged', metrics?.total_time_hours != null ? `${metrics.total_time_hours}h` : '—'],
-          ['Avg resolve', metrics?.avg_resolution_hours != null ? `${metrics.avg_resolution_hours}h` : '—'],
-        ].map(([k, v]) => (
-          <div key={k} className="card p-3">
-            <div className="text-[11px] uppercase text-slate-500">{k}</div>
-            <div className="text-xl font-extrabold text-brand">{v ?? '—'}</div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {[['Open', metrics?.open], ['Urgent', metrics?.urgent], ['Resolved', metrics?.resolved],
+          ['Hours', metrics?.total_time_hours], ['Avg resolve h', metrics?.avg_resolution_hours ?? '—'], ['Rate', `R${hourlyRate}`]
+        ].map(([label, val]) => (
+          <div key={label} className="card p-3">
+            <div className="text-[10px] uppercase text-slate-500">{label}</div>
+            <div className="text-lg font-extrabold tabular-nums">{val ?? '—'}</div>
           </div>
         ))}
       </div>
 
-      <form className="card mt-4 space-y-2 p-3" onSubmit={create}>
-        <div className="flex flex-wrap gap-2">
-          <input className="input min-w-[200px] flex-1" placeholder="Ticket title" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          <select className="input max-w-[120px]" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-            {PRIOS.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <select className="input max-w-[130px]" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-            {CATS.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <button className="btn-primary" type="submit">Create</button>
-        </div>
-        <textarea className="input" rows={2} placeholder="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-      </form>
-
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         <input className="input max-w-xs" placeholder="Search…" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && loadList()} />
-        {['', ...STATUSES].map((s) => (
-          <button key={s || 'all'} type="button" className={`btn-outline !py-1 !text-xs capitalize ${filter.status === s ? '!border-brand !text-brand' : ''}`} onClick={() => setFilter({ ...filter, status: s })}>
-            {s || 'all'}
-          </button>
-        ))}
+        <select className="input max-w-[140px]" value={filter.status} onChange={(e) => setFilter({ ...filter, status: e.target.value })}>
+          <option value="">All statuses</option>
+          {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select className="input max-w-[120px]" value={filter.priority} onChange={(e) => setFilter({ ...filter, priority: e.target.value })}>
+          <option value="">All priority</option>
+          {PRIOS.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select className="input max-w-[120px]" value={filter.category} onChange={(e) => setFilter({ ...filter, category: e.target.value })}>
+          <option value="">All categories</option>
+          {CATS.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button type="button" className="btn-outline" onClick={loadList}>Refresh</button>
       </div>
 
-      <div className={`mt-4 grid gap-4 ${selected ? 'lg:grid-cols-[1fr_420px]' : ''}`}>
-        <div className="space-y-2">
-          {list.map((t) => (
-            <button key={t.id} type="button" onClick={() => openTicket(t.id)}
-              className={`card w-full p-3 text-left transition-all duration-200 hover:border-brand ${selected === t.id ? 'border-brand ring-2 ring-brand/20' : ''}`}>
-              <div className="flex items-start justify-between gap-2">
-                <strong className="text-sm">{t.title}</strong>
-                <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase ${prioClass(t.priority)}`}>{t.priority}</span>
-              </div>
-              <div className="mt-1 text-xs capitalize text-slate-500">
-                {t.status.replace('_', ' ')} · {t.category || '—'} · {t.client_name || 'No client'}
-                {t.time_spent_seconds > 0 && ` · ${fmtTime(t.time_spent_seconds)}`}
-                {t.timer_started_at && ' · ⏱ running'}
-              </div>
-              {t.description && <p className="mt-1 text-xs text-slate-600 line-clamp-2">{t.description}</p>}
-            </button>
-          ))}
-          {!list.length && <p className="text-sm text-slate-500">No tickets yet.</p>}
+      <div className="grid gap-3 lg:grid-cols-[1fr_minmax(300px,400px)]">
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur text-left text-[10px] uppercase text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Job</th>
+                  <th className="px-2 py-2">Client</th>
+                  <th className="px-2 py-2">Status</th>
+                  <th className="px-2 py-2">Prio</th>
+                  <th className="px-2 py-2">Time</th>
+                  <th className="px-2 py-2">Due</th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.map((t) => (
+                  <tr key={t.id} onClick={() => openTicket(t.id)}
+                    className={`cursor-pointer border-t border-slate-100 dark:border-slate-800 hover:bg-accent/5 ${selected === t.id ? 'bg-accent/10' : ''}`}>
+                    <td className="px-3 py-2.5">
+                      <div className="font-semibold">{t.title}</div>
+                      <div className="text-[10px] text-slate-500">{t.category || '—'}{t.timer_started_at && <span className="ml-1 text-accent animate-pulse">● live</span>}</div>
+                    </td>
+                    <td className="px-2 py-2 text-xs">{t.client_name || '—'}</td>
+                    <td className="px-2 py-2 text-xs capitalize">{t.status?.replace('_', ' ')}</td>
+                    <td className={`px-2 py-2 text-xs font-semibold capitalize ${prioColor(t.priority)}`}>{t.priority}</td>
+                    <td className="px-2 py-2 text-xs tabular-nums">{fmtTime(t.time_spent_seconds)}</td>
+                    <td className="px-2 py-2 text-xs">{t.due_date || '—'}</td>
+                  </tr>
+                ))}
+                {!list.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-500">No tickets. Create a job card.</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        {detail && (
-          <div className="card flex max-h-[80vh] flex-col p-4">
-            <h2 className="font-bold">{detail.title}</h2>
-            <p className="text-xs text-slate-500">Opened {detail.created_at?.slice(0, 16)?.replace('T', ' ')}</p>
-
-            <div className="mt-3 rounded-xl border border-brand/30 bg-brand/5 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-[11px] uppercase text-slate-500">Time tracked</div>
-                  <div className="text-lg font-extrabold text-brand font-mono">
-                    {fmtTime((detail.time_spent_seconds || 0) + (detail.timer_started_at ? liveTimer : 0))}
-                    {detail.timer_started_at && <span className="ml-2 text-xs animate-pulse text-red-500">● LIVE</span>}
-                  </div>
+        <div className="card p-3 space-y-3 max-h-[70vh] overflow-y-auto">
+          {!detail ? (
+            <p className="text-sm text-slate-500 p-4">Select a ticket for timer, comments & billing.</p>
+          ) : (
+            <>
+              <div>
+                <h2 className="font-bold">{detail.title}</h2>
+                <p className="text-[11px] text-slate-500">{detail.client_name || 'No client'} · {detail.category}</p>
+              </div>
+              <div className="rounded-xl border border-accent/20 bg-accent/5 p-3 space-y-2">
+                <div className="flex justify-between text-[10px] uppercase text-slate-500">
+                  <span>Timer</span>
+                  {detail.timer_started_at && <span className="text-accent animate-pulse">● Running</span>}
                 </div>
-                <div className="flex gap-1">
+                <div className="text-2xl font-extrabold tabular-nums">{fmtTime(displaySeconds)}</div>
+                <div className="text-[11px] text-slate-500">Billable ≈ {fmtMoney(billablePreview)} @ {fmtMoney(hourlyRate)}/hr</div>
+                <div className="flex flex-wrap gap-2">
                   {!detail.timer_started_at ? (
-                    <button type="button" className="btn-primary !py-1 !text-xs" onClick={startTimer}>Start</button>
+                    <button type="button" className="btn-primary !text-xs" onClick={timerStart}>Start timer</button>
                   ) : (
-                    <button type="button" className="btn-outline !py-1 !text-xs !border-red-400 !text-red-600" onClick={stopTimer}>Stop</button>
+                    <button type="button" className="btn-outline !text-xs !border-red-400 !text-red-600" onClick={timerStop}>Stop & log</button>
                   )}
+                  <input className="input !py-1 !w-16 text-xs" type="number" min="1" placeholder="min" value={manualMin} onChange={(e) => setManualMin(e.target.value)} />
+                  <button type="button" className="btn-outline !text-xs" onClick={addManual}>+ Log</button>
+                </div>
+                <button type="button" className="btn-primary w-full !text-xs" disabled={busy} onClick={billInvoice}>Bill hours → invoice</button>
+              </div>
+              <div>
+                <label className="label">Status</label>
+                <select className="input" value={detail.status} onChange={(e) => patchStatus(e.target.value)}>
+                  {STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+                </select>
+              </div>
+              {detail.description && (
+                <pre className="whitespace-pre-wrap text-xs bg-black/5 dark:bg-white/5 rounded-lg p-2">{detail.description}</pre>
+              )}
+              {detail.time_entries?.length > 0 && (
+                <ul className="text-xs space-y-1 max-h-24 overflow-y-auto">
+                  {detail.time_entries.map((e) => (
+                    <li key={e.id} className="flex justify-between"><span>{e.user_name}</span><span className="tabular-nums">{fmtTime(e.seconds)}</span></li>
+                  ))}
+                </ul>
+              )}
+              <div>
+                <div className="label">Comments</div>
+                <div className="space-y-1 max-h-28 overflow-y-auto mb-2">
+                  {(detail.comments || []).map((c) => (
+                    <div key={c.id} className="text-xs rounded-lg bg-black/5 dark:bg-white/5 p-2">
+                      <div className="font-semibold">{c.author_name}{c.internal ? ' · internal' : ''}</div>
+                      <div>{c.text}</div>
+                    </div>
+                  ))}
+                </div>
+                <textarea className="input text-xs" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add update…" />
+                <div className="mt-1 flex items-center gap-2">
+                  <label className="flex items-center gap-1 text-[11px]"><input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} /> Internal</label>
+                  <button type="button" className="btn-outline !text-xs ml-auto" onClick={addComment}>Post</button>
                 </div>
               </div>
-              <div className="mt-2 flex gap-1">
-                <input className="input !py-1 text-xs" type="number" min="0.1" step="0.1" placeholder="Mins" value={manualMin} onChange={(e) => setManualMin(e.target.value)} />
-                <button type="button" className="btn-outline !py-1 !text-xs" onClick={logManual}>Log</button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {showJobcard && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-3">
+          <form onSubmit={createJobcard} className="card glass-panel w-full max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6 space-y-3">
+            <div className="flex justify-between items-center">
+              <h2 className="text-lg font-extrabold">New job card</h2>
+              <button type="button" className="btn-ghost !px-2" onClick={() => setShowJobcard(false)}>✕</button>
+            </div>
+            <div>
+              <label className="label">Job title *</label>
+              <input className="input" required value={job.title} onChange={(e) => setJ('title', e.target.value)} placeholder="Laptop screen replacement" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="label">Client</label>
+                <select className="input" value={job.client_id} onChange={(e) => setJ('client_id', e.target.value)}>
+                  <option value="">— Select —</option>
+                  {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
               </div>
-            </div>
-
-            <div className="mt-2 flex flex-wrap gap-1">
-              {STATUSES.map((s) => (
-                <button key={s} type="button" className={`btn-outline !px-2 !py-1 text-[11px] capitalize ${detail.status === s ? '!border-brand !text-brand' : ''}`} onClick={() => setStatus(s)}>
-                  {s.replace('_', ' ')}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
               <div>
                 <label className="label">Category</label>
-                <select className="input !py-1" value={detail.category || ''} onChange={(e) => saveMeta({ category: e.target.value })}>
-                  <option value="">—</option>
+                <select className="input" value={job.category} onChange={(e) => setJ('category', e.target.value)}>
                   {CATS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
               <div>
                 <label className="label">Priority</label>
-                <select className="input !py-1" value={detail.priority} onChange={(e) => saveMeta({ priority: e.target.value })}>
-                  {PRIOS.map((p) => <option key={p} value={p}>{p}</option>)}
+                <select className="input" value={job.priority} onChange={(e) => setJ('priority', e.target.value)}>
+                  {PRIOS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
-              <div className="col-span-2">
+              <div>
                 <label className="label">Due date</label>
-                <input type="date" className="input !py-1" value={detail.due_date?.slice(0, 10) || ''} onChange={(e) => saveMeta({ due_date: e.target.value || null })} />
-              </div>
-              <div className="col-span-2">
-                <label className="label">Tags</label>
-                <input className="input !py-1" value={detail.tags || ''} onBlur={(e) => saveMeta({ tags: e.target.value })} onChange={(e) => setDetail({ ...detail, tags: e.target.value })} />
+                <input className="input" type="date" value={job.due_date} onChange={(e) => setJ('due_date', e.target.value)} />
               </div>
             </div>
-
-            {detail.description && (
-              <div className="mt-2">
-                <div className="text-[11px] uppercase text-slate-500">Description</div>
-                <p className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{detail.description}</p>
-              </div>
-            )}
-
-            {detail.time_entries?.length > 0 && (
-              <div className="mt-2 max-h-24 overflow-auto text-[11px] text-slate-500">
-                {detail.time_entries.map((te) => (
-                  <div key={te.id}>{te.user_name} · {fmtTime(te.seconds)} · {te.started_at?.slice(0, 16)?.replace('T', ' ')} {te.note ? `· ${te.note}` : ''}</div>
-                ))}
-              </div>
-            )}
-
-            <div className="ticket-thread mt-3 flex-1 space-y-2 overflow-auto">
-              {(detail.comments || []).map((c) => (
-                <div key={c.id} className={`rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 p-2 text-sm ${c.internal ? 'border-l-4 border-l-amber-500' : ''}`}>
-                  <div className="text-[11px] text-slate-500">
-                    {c.author_name || 'staff'} · {c.created_at?.slice(0, 16)?.replace('T', ' ')}
-                    {c.internal ? ' · internal' : ''}
-                    {c.time_logged_seconds > 0 ? ` · +${fmtTime(c.time_logged_seconds)}` : ''}
-                  </div>
-                  <div>{c.text}</div>
-                </div>
-              ))}
-              {!detail.comments?.length && <p className="text-xs text-slate-500">No messages yet. Say hi as {user?.name}.</p>}
+            <div>
+              <label className="label">Fault reported</label>
+              <input className="input" value={job.fault_reported} onChange={(e) => setJ('fault_reported', e.target.value)} />
             </div>
-
-            <form className="mt-3 space-y-2 border-t border-slate-100 dark:border-slate-800 pt-3" onSubmit={postComment}>
-              <textarea className="input" rows={2} placeholder="Reply…" required value={comment} onChange={(e) => setComment(e.target.value)} />
-              <label className="flex items-center gap-2 text-xs">
-                <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
-                Internal note (not for client)
-              </label>
-              <button className="btn-primary w-full" type="submit">Send</button>
-            </form>
-          </div>
-        )}
-      </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="label">Device</label>
+                <input className="input" value={job.device_info} onChange={(e) => setJ('device_info', e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Serials</label>
+                <input className="input" value={job.serial_numbers} onChange={(e) => setJ('serial_numbers', e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label className="label">Site address</label>
+              <input className="input" value={job.site_address} onChange={(e) => setJ('site_address', e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Description</label>
+              <textarea className="input" rows={2} value={job.description} onChange={(e) => setJ('description', e.target.value)} />
+            </div>
+            <div className="flex gap-2">
+              <button type="button" className="btn-outline flex-1" onClick={() => setShowJobcard(false)}>Cancel</button>
+              <button type="submit" className="btn-primary flex-1" disabled={busy}>{busy ? 'Saving…' : 'Create job card'}</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
