@@ -3,7 +3,8 @@ import cors from 'cors'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
-import { seedIfEmpty } from './db.js'
+import { seedIfEmpty, db } from './db.js'
+import { applyQ2Migrations } from './migrations_q2.js'
 import { authRouter } from './routes/auth.js'
 import { clientsRouter } from './routes/clients.js'
 import { invoicesRouter } from './routes/invoices.js'
@@ -12,10 +13,10 @@ import { documentsRouter } from './routes/documents.js'
 import { settingsRouter } from './routes/settings.js'
 import { errorHandler, notFound } from './middleware/error.js'
 import { requireAuth } from './middleware/auth.js'
-import { db } from './db.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 seedIfEmpty()
+applyQ2Migrations(db)
 
 const app = express()
 app.use(cors({ origin: true, credentials: true }))
@@ -23,7 +24,7 @@ app.use(express.json({ limit: '8mb' }))
 
 app.get('/api/v1/health', (_req, res) => {
   const tplCount = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
-  res.json({ ok: true, service: 'said', version: '1.4.0', templates: tplCount })
+  res.json({ ok: true, service: 'said', version: '1.5.0', templates: tplCount })
 })
 
 app.get('/api/v1/company', requireAuth, (_req, res) => {
