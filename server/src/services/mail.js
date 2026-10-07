@@ -58,3 +58,26 @@ export async function sendOtpEmail(to, code, purpose = 'verify') {
     return { delivered: false, devCode: code }
   }
 }
+
+/** Generic transactional email (reminders, receipts) */
+export async function sendAppEmail({ to, subject, text, html }) {
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@said.local'
+  const tx = await getTransporter()
+  if (!tx) {
+    console.log(`[SAID mail stub] to=${to} subject=${subject}\n${text}`)
+    return { delivered: false, stub: true }
+  }
+  try {
+    await tx.sendMail({
+      from,
+      to,
+      subject,
+      text,
+      html: html || `<pre style="font-family:system-ui,sans-serif">${String(text || '').replace(/</g, '&lt;')}</pre>`,
+    })
+    return { delivered: true }
+  } catch (e) {
+    console.error('[SAID mail] send failed:', e.message)
+    return { delivered: false, error: e.message }
+  }
+}

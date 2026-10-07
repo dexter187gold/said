@@ -27,16 +27,20 @@ export default function Money() {
   const [depForm, setDepForm] = useState({ client_id: '', amount: '', method: 'EFT', note: '' })
   const [pfConfig, setPfConfig] = useState(null)
   const [pfForm, setPfForm] = useState({ merchant_id: '', merchant_key: '', passphrase: '', sandbox: true })
+  const [retainers, setRetainers] = useState([])
+  const [retForm, setRetForm] = useState({ client_id: '', amount: '', interval_days: 30, description: 'Monthly retainer' })
+  const [snapId, setSnapId] = useState('')
 
   const load = async () => {
     setLoading(true)
     try {
-      const [o, p, m, d, cl] = await Promise.all([
+      const [o, p, m, d, cl, ret] = await Promise.all([
         api('/api/v1/money/open-balances'),
         api('/api/v1/money/payments?limit=40'),
         api('/api/v1/money/methods'),
         api('/api/v1/money/deposits'),
         api('/api/v1/clients'),
+        api('/api/v1/money/retainers'),
       ])
       setOpen(o.data || [])
       setTotalOpen(o.total_open || 0)
@@ -46,6 +50,7 @@ export default function Money() {
       setDeposits(d.data || [])
       setUnapplied(d.unapplied_total || 0)
       setClients(cl.data || [])
+      setRetainers(ret.data || [])
     } catch (e) {
       notify(e.message, 'error')
     } finally {
@@ -164,6 +169,7 @@ export default function Money() {
           { id: 'payments', label: 'Payment ledger' },
           { id: 'record', label: 'Record payment' },
           { id: 'deposits', label: 'Deposits' },
+          { id: 'retainers', label: 'Retainers' },
           { id: 'payfast', label: 'PayFast' },
         ].map((t) => (
           <button
@@ -235,11 +241,28 @@ export default function Money() {
                               type="button"
                               className="btn-outline !text-[10px] !py-0.5"
                               onClick={() => dunning(r.id, s.id)}
-                              title={s.label}
+                              title={`WhatsApp ${s.label}`}
                             >
-                              {s.label}
+                              WA {s.label}
                             </button>
                           ))}
+                          <button
+                            type="button"
+                            className="btn-outline !text-[10px] !py-0.5"
+                            onClick={async () => {
+                              try {
+                                const res = await api(`/api/v1/money/dunning/${r.id}/email`, {
+                                  method: 'POST',
+                                  body: { stage: 'friendly' },
+                                })
+                                notify(res.data.delivered ? `Email sent to ${res.data.to}` : `Email stub → ${res.data.to}`)
+                              } catch (e) {
+                                notify(e.message, 'error')
+                              }
+                            }}
+                          >
+                            Email
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -462,6 +485,111 @@ export default function Money() {
         </div>
       )}
 
+      
+      {!loading && tab === 'retainers' && (
+        <div className="space-y-3">
+          <form
+            className="card p-4 space-y-3 max-w-lg"
+            onSubmit={async (e) => {
+              e.preventDefault()
+              try {
+                await api('/api/v1/money/retainers', {
+                  method: 'POST',
+                  body: {
+                    client_id: retForm.client_id,
+                    amount: Number(retForm.amount),
+                    interval_days: Number(retForm.interval_days) || 30,
+                    description: retForm.description || 'Retainer',
+                  },
+                })
+                notify('Retainer schedule created')
+                setRetForm({ client_id: '', amount: '', interval_days: 30, description: 'Monthly retainer' })
+                load()
+              } catch (err) {
+                notify(err.message, 'error')
+              }
+            }}
+          >
+            <h2 className="font-bold text-sm">Retainer / recurring billing</h2>
+            <p className="text-xs text-slate-500">Creates invoices on a schedule when you run due retainers.</p>
+            <select className="input" required value={retForm.client_id} onChange={(e) => setRetForm((f) => ({ ...f, client_id: e.target.value }))}>
+              <option value="">Client…</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <input className="input" type="number" step="0.01" placeholder="Amount" required value={retForm.amount} onChange={(e) => setRetForm((f) => ({ ...f, amount: e.target.value }))} />
+              <input className="input" type="number" placeholder="Every N days" value={retForm.interval_days} onChange={(e) => setRetForm((f) => ({ ...f, interval_days: e.target.value }))} />
+              <input className="input" placeholder="Description" value={retForm.description} onChange={(e) => setRetForm((f) => ({ ...f, description: e.target.value }))} />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="submit" className="btn-primary">Add schedule</button>
+              <button
+                type="button"
+                className="btn-outline"
+                onClick={async () => {
+                  try {
+                    const r = await api('/api/v1/money/retainers/run', { method: 'POST' })
+                    notify(`Created ${r.data.count} retainer invoice(s)`)
+                    load()
+                  } catch (e) {
+                    notify(e.message, 'error')
+                  }
+                }}
+              >
+                Run due now
+              </button>
+            </div>
+          </form>
+          <div className="card overflow-hidden">
+            {!retainers.length ? (
+              <EmptyState title="No retainer schedules" body="Add a monthly or custom interval retainer for a client." />
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase text-slate-500 text-left bg-slate-50 dark:bg-slate-900/50">
+                  <tr>
+                    <th className="px-3 py-2">Client</th>
+                    <th className="px-2 py-2">Amount</th>
+                    <th className="px-2 py-2">Every</th>
+                    <th className="px-2 py-2">Next run</th>
+                    <th className="px-2 py-2">Active</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {retainers.map((r) => (
+                    <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-3 py-2">{r.client_name}</td>
+                      <td className="px-2 py-2 tabular-nums">{fmt(r.amount)}</td>
+                      <td className="px-2 py-2 text-xs">{r.interval_days}d</td>
+                      <td className="px-2 py-2 text-xs">{r.next_run}</td>
+                      <td className="px-2 py-2">
+                        <button
+                          type="button"
+                          className="btn-outline !text-[10px] !py-0.5"
+                          onClick={async () => {
+                            try {
+                              await api(`/api/v1/money/retainers/${r.id}`, {
+                                method: 'PATCH',
+                                body: { active: r.active ? 0 : 1 },
+                              })
+                              load()
+                            } catch (e) {
+                              notify(e.message, 'error')
+                            }
+                          }}
+                        >
+                          {r.active ? 'Pause' : 'Resume'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+
       {!loading && tab === 'payfast' && (
         <div className="card p-4 space-y-3 max-w-lg">
           <h2 className="font-bold text-sm">PayFast settings</h2>
@@ -520,6 +648,27 @@ export default function Money() {
               <button type="submit" className="btn-primary">Save PayFast</button>
             </form>
           )}
+          <div className="border-t border-slate-200 dark:border-slate-700 pt-3 space-y-2">
+            <h3 className="font-semibold text-xs">SnapScan merchant</h3>
+            <input className="input" placeholder="SnapScan ID" value={snapId} onChange={(e) => setSnapId(e.target.value)} />
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                try {
+                  await api('/api/v1/money/snapscan/config', { method: 'PUT', body: { snapscan_id: snapId } })
+                  notify('SnapScan ID saved')
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Save SnapScan
+            </button>
+            <p className="text-[10px] text-slate-500">
+              PayFast ITN URL for your merchant dashboard: <code className="text-[10px]">/api/v1/money/payfast/itn</code>
+            </p>
+          </div>
         </div>
       )}
 

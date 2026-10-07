@@ -6,6 +6,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { db, uid, now, audit } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
+import { sendAppEmail } from '../services/mail.js'
 
 export const moneyRouter = Router()
 moneyRouter.use(requireAuth)
@@ -558,3 +559,347 @@ moneyRouter.get('/snapscan/:invoiceId', (req, res) => {
     },
   })
 })
+
+/* ─── Hermes-Metal slice 3: ITN, email dunning, retainers, SnapScan config ─── */
+
+
+try {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS retainer_schedules (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  amount REAL NOT NULL,
+  interval_days INTEGER NOT NULL DEFAULT 30,
+  next_run TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  description TEXT,
+  last_invoice_id TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payfast_itn_log (
+  id TEXT PRIMARY KEY,
+  payload TEXT,
+  m_payment_id TEXT,
+  payment_status TEXT,
+  amount_gross TEXT,
+  processed INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+`)
+} catch (e) {
+  console.warn('slice3 tables', e.message)
+}
+
+/** SnapScan merchant id setting */
+moneyRouter.get('/snapscan/config', requireRole('admin'), (_req, res) => {
+  res.json({ data: { snapscan_id: getSetting('snapscan_id', '') } })
+})
+
+moneyRouter.put('/snapscan/config', requireRole('admin'), (req, res, next) => {
+  try {
+    const id = z.string().parse(req.body?.snapscan_id ?? '')
+    setSetting('snapscan_id', id)
+    audit(req.user.sub, 'snapscan.config', null, req.ip)
+    res.json({ data: { snapscan_id: id } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Email dunning (uses SMTP if configured; otherwise stubs to logs) */
+moneyRouter.post('/dunning/:invoiceId/email', requireRole('staff'), async (req, res, next) => {
+  try {
+    const stage = z.enum(['friendly', 'followup', 'final']).default('friendly').parse(req.body?.stage || 'friendly')
+    const inv = db
+      .prepare(
+        `SELECT i.*, c.name AS client_name, c.email AS client_email, c.phone AS client_phone
+         FROM invoices i LEFT JOIN clients c ON c.id = i.client_id WHERE i.id = ?`
+      )
+      .get(req.params.invoiceId)
+    if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
+    if (!inv.client_email) {
+      return res.status(400).json({ error: true, message: 'Client has no email address' })
+    }
+    const co = db.prepare(`SELECT * FROM company WHERE id = 'main'`).get() || {}
+    const balance = Math.max(0, Number(inv.total || 0) - Number(inv.amount_paid || 0))
+    const subjects = {
+      friendly: `Reminder: invoice ${inv.number} — ${moneyFmt(balance)}`,
+      followup: `Follow-up: invoice ${inv.number} outstanding`,
+      final: `Final notice: invoice ${inv.number}`,
+    }
+    const bodies = {
+      friendly:
+        `Hi ${inv.client_name || 'there'},\n\n` +
+        `This is a friendly reminder that invoice ${inv.number} has an open balance of ${moneyFmt(balance)}` +
+        (inv.due_date ? ` (due ${inv.due_date})` : '') +
+        `.\n\nBank: ${co.bank_name || '—'} · Acc ${co.account_number || '—'} · Branch ${co.branch_code || '—'} · Ref ${inv.number}\n\n` +
+        `If you have already paid, please send proof of payment.\n\nThank you,\n${co.name || 'SAID'}`,
+      followup:
+        `Hi ${inv.client_name || 'there'},\n\n` +
+        `We are following up on invoice ${inv.number}. Balance still outstanding: ${moneyFmt(balance)}.\n` +
+        `Please settle at your earliest convenience.\n\nRef: ${inv.number}\n\n${co.name || 'SAID'}`,
+      final:
+        `Hi ${inv.client_name || 'there'},\n\n` +
+        `Final notice regarding invoice ${inv.number} — ${moneyFmt(balance)} outstanding.\n` +
+        `Please settle within 7 days to avoid further collection steps.\n\nRef: ${inv.number}\n\n${co.name || 'SAID'}`,
+    }
+    const mail = await sendAppEmail({
+      to: inv.client_email,
+      subject: subjects[stage],
+      text: bodies[stage],
+    })
+    try {
+      db.prepare(
+        `INSERT INTO payment_reminders (id, invoice_id, channel, sent_at, note, created_by) VALUES (?,?,?,?,?,?)`
+      ).run(uid(), inv.id, 'email', now(), stage, req.user.sub)
+    } catch {}
+    db.prepare(`UPDATE invoices SET reminder_at = ?, updated_at = ? WHERE id = ?`).run(now(), now(), inv.id)
+    audit(req.user.sub, 'dunning.email', `${inv.number}:${stage}`, req.ip)
+    res.json({ data: { ok: true, delivered: mail.delivered, stub: !!mail.stub, stage, to: inv.client_email } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Bulk email dunning for open invoices past due */
+moneyRouter.post('/dunning/bulk-email', requireRole('staff'), async (req, res, next) => {
+  try {
+    const stage = z.enum(['friendly', 'followup', 'final']).default('friendly').parse(req.body?.stage || 'friendly')
+    const rows = db
+      .prepare(
+        `SELECT i.id FROM invoices i
+         WHERE COALESCE(i.doc_type,'invoice')='invoice'
+           AND i.status IN ('unpaid','partial','overdue')
+           AND (i.total - i.amount_paid) > 0.009
+           AND i.due_date IS NOT NULL AND i.due_date < date('now')
+         LIMIT 30`
+      )
+      .all()
+    let sent = 0
+    const errors = []
+    for (const r of rows) {
+      try {
+        // reuse by calling logic inline via fetch to self is heavy — duplicate minimal path
+        const inv = db
+          .prepare(
+            `SELECT i.*, c.name AS client_name, c.email AS client_email
+             FROM invoices i LEFT JOIN clients c ON c.id = i.client_id WHERE i.id = ?`
+          )
+          .get(r.id)
+        if (!inv?.client_email) continue
+        const co = db.prepare(`SELECT name, bank_name, account_number, branch_code FROM company WHERE id = 'main'`).get() || {}
+        const balance = Math.max(0, Number(inv.total || 0) - Number(inv.amount_paid || 0))
+        await sendAppEmail({
+          to: inv.client_email,
+          subject: `Reminder: invoice ${inv.number} — ${moneyFmt(balance)}`,
+          text:
+            `Hi ${inv.client_name || 'there'},\n\nInvoice ${inv.number} balance ${moneyFmt(balance)}.\n` +
+            `Ref ${inv.number}. Bank ${co.bank_name || ''} ${co.account_number || ''}.\n\n${co.name || 'SAID'}`,
+        })
+        try {
+          db.prepare(
+            `INSERT INTO payment_reminders (id, invoice_id, channel, sent_at, note, created_by) VALUES (?,?,?,?,?,?)`
+          ).run(uid(), inv.id, 'email', now(), stage, req.user.sub)
+        } catch {}
+        sent++
+      } catch (err) {
+        errors.push(err.message)
+      }
+    }
+    res.json({ data: { sent, candidates: rows.length, errors: errors.slice(0, 5) } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Retainer schedules CRUD */
+moneyRouter.get('/retainers', (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT r.*, c.name AS client_name
+       FROM retainer_schedules r
+       LEFT JOIN clients c ON c.id = r.client_id
+       ORDER BY r.active DESC, r.next_run ASC`
+    )
+    .all()
+  res.json({ data: rows })
+})
+
+moneyRouter.post('/retainers', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        client_id: z.string().min(1),
+        amount: z.coerce.number().positive(),
+        interval_days: z.coerce.number().int().positive().default(30),
+        next_run: z.string().optional(),
+        description: z.string().optional().nullable(),
+      })
+      .parse(req.body)
+    const client = db.prepare(`SELECT id FROM clients WHERE id = ?`).get(body.client_id)
+    if (!client) return res.status(404).json({ error: true, message: 'Client not found' })
+    const id = uid()
+    const nextRun = body.next_run || now().slice(0, 10)
+    db.prepare(
+      `INSERT INTO retainer_schedules (id, client_id, amount, interval_days, next_run, active, description, created_by, created_at)
+       VALUES (?,?,?,?,?,1,?,?,?)`
+    ).run(id, body.client_id, body.amount, body.interval_days, nextRun, body.description || 'Retainer', req.user.sub, now())
+    res.status(201).json({ data: db.prepare(`SELECT * FROM retainer_schedules WHERE id = ?`).get(id) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+moneyRouter.patch('/retainers/:id', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        active: z.coerce.number().int().min(0).max(1).optional(),
+        amount: z.coerce.number().positive().optional(),
+        interval_days: z.coerce.number().int().positive().optional(),
+        next_run: z.string().optional(),
+        description: z.string().optional().nullable(),
+      })
+      .parse(req.body || {})
+    const ex = db.prepare(`SELECT * FROM retainer_schedules WHERE id = ?`).get(req.params.id)
+    if (!ex) return res.status(404).json({ error: true, message: 'Not found' })
+    db.prepare(
+      `UPDATE retainer_schedules SET active=?, amount=?, interval_days=?, next_run=?, description=? WHERE id=?`
+    ).run(
+      body.active !== undefined ? body.active : ex.active,
+      body.amount ?? ex.amount,
+      body.interval_days ?? ex.interval_days,
+      body.next_run ?? ex.next_run,
+      body.description !== undefined ? body.description : ex.description,
+      req.params.id
+    )
+    res.json({ data: db.prepare(`SELECT * FROM retainer_schedules WHERE id = ?`).get(req.params.id) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Run due retainers → create invoices */
+moneyRouter.post('/retainers/run', requireRole('staff'), (req, res, next) => {
+  try {
+    const today = now().slice(0, 10)
+    const due = db
+      .prepare(`SELECT * FROM retainer_schedules WHERE active = 1 AND next_run <= ?`)
+      .all(today)
+    const created = []
+    for (const r of due) {
+      const invId = uid()
+      const y = new Date().getFullYear()
+      const c = db.prepare(`SELECT COUNT(*) AS c FROM invoices WHERE number LIKE ?`).get(`INV-${y}-%`).c
+      const number = `INV-${y}-${String(c + 1).padStart(4, '0')}`
+      const desc = r.description || 'Retainer'
+      const exclusive = Number(r.amount)
+      const vat = Math.round(exclusive * 0.15 * 100) / 100
+      const total = Math.round((exclusive + vat) * 100) / 100
+      const dueDate = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10)
+      db.prepare(
+        `INSERT INTO invoices (
+          id, number, client_id, date, due_date, status, notes, exclusive, vat_amount, total, amount_paid,
+          created_by, created_at, updated_at, doc_type, payment_note
+        ) VALUES (?,?,?,?,?,'unpaid',?,?,?,?,0,?,?,?,'invoice',?)`
+      ).run(
+        invId,
+        number,
+        r.client_id,
+        today,
+        dueDate,
+        `Auto retainer · schedule ${r.id.slice(0, 8)}`,
+        exclusive,
+        vat,
+        total,
+        req.user.sub,
+        now(),
+        now(),
+        'Retainer payment due on completion terms.'
+      )
+      db.prepare(
+        `INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,0)`
+      ).run(uid(), invId, desc, 1, exclusive)
+      const next = new Date(r.next_run)
+      next.setDate(next.getDate() + Number(r.interval_days || 30))
+      db.prepare(`UPDATE retainer_schedules SET next_run=?, last_invoice_id=? WHERE id=?`).run(
+        next.toISOString().slice(0, 10),
+        invId,
+        r.id
+      )
+      created.push({ schedule_id: r.id, invoice_id: invId, number })
+    }
+    audit(req.user.sub, 'retainers.run', `created=${created.length}`, req.ip)
+    res.json({ data: { created, count: created.length } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/**
+ * PayFast ITN (Instant Transaction Notification) — public handler
+ * Validates payment_status COMPLETE and marks invoice paid by m_payment_id (invoice number)
+ */
+export async function handlePayfastItn(req, res) {
+  try {
+    const body = req.body || {}
+    const logId = uid()
+    db.prepare(
+      `INSERT INTO payfast_itn_log (id, payload, m_payment_id, payment_status, amount_gross, processed, created_at)
+       VALUES (?,?,?,?,?,0,?)`
+    ).run(
+      logId,
+      JSON.stringify(body).slice(0, 8000),
+      body.m_payment_id || null,
+      body.payment_status || null,
+      body.amount_gross || null,
+      now()
+    )
+
+    const status = String(body.payment_status || '').toUpperCase()
+    const mPaymentId = body.m_payment_id
+    if (status !== 'COMPLETE' || !mPaymentId) {
+      return res.status(200).send('OK')
+    }
+
+    const inv = db.prepare(`SELECT * FROM invoices WHERE number = ?`).get(mPaymentId)
+    if (!inv) {
+      console.warn('[PayFast ITN] unknown invoice', mPaymentId)
+      return res.status(200).send('OK')
+    }
+
+    const amount = Number(body.amount_gross || 0)
+    if (amount > 0) {
+      // avoid double-apply same pf_payment_id
+      const pfId = body.pf_payment_id || body.uuid || ''
+      if (pfId) {
+        const exists = db
+          .prepare(`SELECT id FROM payments WHERE note LIKE ? LIMIT 1`)
+          .get(`%pf:${pfId}%`)
+        if (exists) return res.status(200).send('OK')
+      }
+      db.prepare(
+        `INSERT INTO payments (id, invoice_id, amount, method, date, note, created_at) VALUES (?,?,?,?,?,?,?)`
+      ).run(
+        uid(),
+        inv.id,
+        amount,
+        'PayFast',
+        now().slice(0, 10),
+        `PayFast ITN${pfId ? ` pf:${pfId}` : ''}`,
+        now()
+      )
+      const paid = db.prepare(`SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE invoice_id = ?`).get(inv.id).s
+      let st = 'unpaid'
+      if (paid >= inv.total - 0.009) st = 'paid'
+      else if (paid > 0) st = 'partial'
+      db.prepare(`UPDATE invoices SET amount_paid=?, status=?, updated_at=? WHERE id=?`).run(paid, st, now(), inv.id)
+      db.prepare(`UPDATE payfast_itn_log SET processed = 1 WHERE id = ?`).run(logId)
+    }
+    res.status(200).send('OK')
+  } catch (e) {
+    console.error('[PayFast ITN]', e.message)
+    res.status(200).send('OK') // always 200 so PayFast does not retry forever incorrectly
+  }
+}
