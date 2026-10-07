@@ -33,6 +33,7 @@ export default function InvoiceEdit() {
   const [templateId, setTemplateId] = useState('')
   const [templates, setTemplates] = useState([])
   const [accountType, setAccountType] = useState('COD Account')
+  const [dueDate, setDueDate] = useState('')
 
   useEffect(() => {
     api('/api/v1/clients').then((r) => setClients(r.data)).catch(() => {})
@@ -45,6 +46,8 @@ export default function InvoiceEdit() {
       setTemplateId((prev) => prev || 'quote_flatrate_cod')
       setPaymentNote('100% due on completion and hand-over / collection, unless stated otherwise in writing. Cash, EFT (with proof) or instant payment. Devices released only after payment confirmation.')
       setStatus('unpaid')
+      const d = new Date(); d.setDate(d.getDate() + 14)
+      setDueDate(d.toISOString().slice(0, 10))
     } else if (pathType === 'invoice') {
       setTemplateId((prev) => prev || 'tax_invoice_full')
     }
@@ -66,6 +69,7 @@ export default function InvoiceEdit() {
         setLines(d.lines?.length ? d.lines : [{ description: '', qty: 1, price: 0 }])
         setTemplateId(d.template_id || '')
         setAccountType(d.account_type || 'COD Account')
+        setDueDate(d.due_date || '')
       })
       .catch((e) => notify(e.message, 'error'))
   }, [id, isNew])
@@ -81,6 +85,7 @@ export default function InvoiceEdit() {
     doc_type: loaded?.doc_type || pathType,
     template_id: templateId || null,
     account_type: accountType || null,
+    due_date: dueDate || null,
     status,
     notes,
     devices,
@@ -223,6 +228,10 @@ export default function InvoiceEdit() {
             <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}>
               {['unpaid', 'partial', 'paid', 'overdue', 'cancelled'].map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
+          </div>
+          <div>
+            <label className="label">{pathType === 'quote' ? 'Valid until' : 'Due date'}</label>
+            <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </div>
           <div>
             <label className="label">PO / ref</label>
