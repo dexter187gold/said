@@ -7,6 +7,12 @@ import { mountTicketTimers } from './ticketTimers.js'
 export const ticketsRouter = Router()
 ticketsRouter.use(requireAuth)
 
+const PartLine = z.object({
+  name: z.string().min(1),
+  qty: z.coerce.number().default(1),
+  cost: z.coerce.number().default(0),
+})
+
 const TicketBody = z.object({
   title: z.string().min(1),
   description: z.string().optional().nullable(),
@@ -19,61 +25,123 @@ const TicketBody = z.object({
   notes: z.string().optional().nullable(),
   due_date: z.string().optional().nullable(),
   estimated_minutes: z.number().int().optional().nullable(),
+  warranty: z.coerce.number().int().min(0).max(1).optional(),
+  sla_hours: z.coerce.number().int().positive().optional().nullable(),
+  parts: z.array(PartLine).optional(),
+  is_template: z.coerce.number().int().min(0).max(1).optional(),
 })
 
+function parseParts(row) {
+  if (!row) return []
+  try {
+    const p = JSON.parse(row.parts_json || '[]')
+    return Array.isArray(p) ? p : []
+  } catch {
+    return []
+  }
+}
+
+function enrich(row) {
+  if (!row) return null
+  const parts = parseParts(row)
+  let sla_status = null
+  if (row.sla_due_at && !['resolved', 'closed'].includes(row.status)) {
+    const due = new Date(row.sla_due_at).getTime()
+    const left = due - Date.now()
+    sla_status = left < 0 ? 'breached' : left < 3600000 ? 'warning' : 'ok'
+  }
+  return { ...row, parts, sla_status }
+}
+
 ticketsRouter.get('/', (req, res) => {
-  const { status, priority, category, q } = req.query
+  const { status, priority, category, q, assignee_id, warranty, template } = req.query
   let sql = `SELECT t.*, c.name AS client_name, u.name AS assignee_name
     FROM tickets t
     LEFT JOIN clients c ON c.id = t.client_id
     LEFT JOIN users u ON u.id = t.assignee_id WHERE 1=1`
   const params = []
+  if (template === '1') sql += ' AND t.is_template = 1'
+  else sql += ' AND COALESCE(t.is_template,0) = 0'
   if (status) { sql += ' AND t.status = ?'; params.push(status) }
   if (priority) { sql += ' AND t.priority = ?'; params.push(priority) }
   if (category) { sql += ' AND t.category = ?'; params.push(category) }
+  if (assignee_id) { sql += ' AND t.assignee_id = ?'; params.push(assignee_id) }
+  if (warranty === '1') sql += ' AND t.warranty = 1'
   if (q) {
     sql += ' AND (t.title LIKE ? OR t.description LIKE ? OR t.notes LIKE ? OR t.tags LIKE ?)'
     const like = `%${q}%`
     params.push(like, like, like, like)
   }
   sql += ` ORDER BY CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, t.created_at DESC`
-  res.json({ data: db.prepare(sql).all(...params) })
+  res.json({ data: db.prepare(sql).all(...params).map(enrich) })
+})
+
+ticketsRouter.get('/staff', (_req, res) => {
+  res.json({
+    data: db.prepare(`SELECT id, name, email, role FROM users WHERE role IN ('owner','admin','staff') ORDER BY name`).all(),
+  })
 })
 
 ticketsRouter.get('/metrics', (_req, res) => {
-  const open = db.prepare("SELECT COUNT(*) AS c FROM tickets WHERE status IN ('open','in_progress','waiting')").get().c
-  const urgent = db.prepare("SELECT COUNT(*) AS c FROM tickets WHERE priority='urgent' AND status NOT IN ('resolved','closed')").get().c
-  const resolved = db.prepare("SELECT COUNT(*) AS c FROM tickets WHERE status IN ('resolved','closed')").get().c
-  const totalTime = db.prepare('SELECT COALESCE(SUM(time_spent_seconds),0) AS s FROM tickets').get().s
-  const avgMs = db.prepare(`
-    SELECT AVG(
-      (julianday(resolved_at) - julianday(created_at)) * 86400000
-    ) AS ms FROM tickets WHERE resolved_at IS NOT NULL
-  `).get().ms
-  const byStatus = db.prepare(`SELECT status, COUNT(*) AS c FROM tickets GROUP BY status`).all()
-  const byPriority = db.prepare(`SELECT priority, COUNT(*) AS c FROM tickets GROUP BY priority`).all()
-  const byCategory = db.prepare(`SELECT COALESCE(category,'(none)') AS category, COUNT(*) AS c FROM tickets GROUP BY category ORDER BY c DESC LIMIT 10`).all()
+  const open = db.prepare("SELECT COUNT(*) AS c FROM tickets WHERE COALESCE(is_template,0)=0 AND status IN ('open','in_progress','waiting')").get().c
+  const urgent = db.prepare("SELECT COUNT(*) AS c FROM tickets WHERE COALESCE(is_template,0)=0 AND priority='urgent' AND status NOT IN ('resolved','closed')").get().c
+  const resolved = db.prepare("SELECT COUNT(*) AS c FROM tickets WHERE COALESCE(is_template,0)=0 AND status IN ('resolved','closed')").get().c
+  const totalTime = db.prepare('SELECT COALESCE(SUM(time_spent_seconds),0) AS s FROM tickets WHERE COALESCE(is_template,0)=0').get().s
+  const warrantyOpen = db.prepare("SELECT COUNT(*) AS c FROM tickets WHERE COALESCE(is_template,0)=0 AND warranty=1 AND status NOT IN ('resolved','closed')").get().c
+  const slaBreached = db.prepare(`SELECT COUNT(*) AS c FROM tickets WHERE COALESCE(is_template,0)=0 AND sla_due_at IS NOT NULL AND status NOT IN ('resolved','closed') AND sla_due_at < ?`).get(now()).c
+  const avgMs = db.prepare(`SELECT AVG((julianday(resolved_at) - julianday(created_at)) * 86400000) AS ms FROM tickets WHERE resolved_at IS NOT NULL AND COALESCE(is_template,0)=0`).get().ms
   res.json({
     data: {
       open, urgent, resolved,
+      warranty_open: warrantyOpen,
+      sla_breached: slaBreached,
       total_time_hours: Math.round((totalTime / 3600) * 10) / 10,
       avg_resolution_hours: avgMs != null ? Math.round((avgMs / 3600000) * 10) / 10 : null,
-      by_status: byStatus, by_priority: byPriority, by_category: byCategory,
+      by_status: db.prepare(`SELECT status, COUNT(*) AS c FROM tickets WHERE COALESCE(is_template,0)=0 GROUP BY status`).all(),
+      by_priority: db.prepare(`SELECT priority, COUNT(*) AS c FROM tickets WHERE COALESCE(is_template,0)=0 GROUP BY priority`).all(),
     },
   })
 })
 
+ticketsRouter.get('/:id/print', (req, res) => {
+  const t = db.prepare(`SELECT t.*, c.name AS client_name, c.phone AS client_phone, c.address AS client_address,
+    u.name AS assignee_name, co.name AS company_name, co.phone AS company_phone, co.address AS company_address
+    FROM tickets t LEFT JOIN clients c ON c.id = t.client_id LEFT JOIN users u ON u.id = t.assignee_id
+    LEFT JOIN company co ON co.id = 'main' WHERE t.id = ?`).get(req.params.id)
+  if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+  const parts = parseParts(t)
+  const partsRows = parts.map((p) => `<tr><td>${p.name}</td><td>${p.qty}</td><td>R ${Number(p.cost || 0).toFixed(2)}</td><td>R ${(Number(p.qty) * Number(p.cost || 0)).toFixed(2)}</td></tr>`).join('')
+  const hours = Math.round(((t.time_spent_seconds || 0) / 3600) * 100) / 100
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Job Card</title>
+<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:24px auto;padding:16px;font-size:13px}
+h1{font-size:20px;margin:0}.muted{color:#64748b}.box{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:10px 0}
+table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e2e8f0;padding:6px;text-align:left}
+.brand{color:#007A4D;font-weight:800;font-size:11px;letter-spacing:.08em}.sig{margin-top:40px;display:flex;gap:40px}.sig div{flex:1;border-top:1px solid #94a3b8;padding-top:6px}
+@media print{button{display:none}}</style></head><body>
+<div class="brand">SA INVOICE DESK · JOB CARD</div>
+<h1>${t.title}</h1>
+<p class="muted">#${t.id.slice(0, 8)} · ${t.status} · ${t.priority}${t.warranty ? ' · WARRANTY' : ''}</p>
+<div class="box"><strong>${t.company_name || 'Company'}</strong><br>${t.company_address || ''}<br>${t.company_phone || ''}</div>
+<div class="box"><strong>Client:</strong> ${t.client_name || '—'}<br>${t.client_phone || ''}<br>
+<strong>Assignee:</strong> ${t.assignee_name || 'Unassigned'} · <strong>Category:</strong> ${t.category || '—'}
+${t.sla_due_at ? `<br><strong>SLA due:</strong> ${String(t.sla_due_at).slice(0, 16).replace('T', ' ')}` : ''}</div>
+<div class="box"><strong>Description</strong><pre style="white-space:pre-wrap;font-family:inherit">${t.description || '—'}</pre></div>
+${parts.length ? `<div class="box"><strong>Parts</strong><table><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead><tbody>${partsRows}</tbody></table></div>` : ''}
+<div class="box"><strong>Time:</strong> ${hours} h</div>
+<div class="sig"><div>Technician signature</div><div>Customer signature</div></div>
+<button onclick="window.print()">Print</button></body></html>`
+  res.type('html').send(html)
+})
+
 ticketsRouter.get('/:id', (req, res) => {
-  const t = db.prepare(
-    `SELECT t.*, c.name AS client_name, u.name AS assignee_name
-     FROM tickets t
-     LEFT JOIN clients c ON c.id = t.client_id
-     LEFT JOIN users u ON u.id = t.assignee_id WHERE t.id = ?`
-  ).get(req.params.id)
+  const t = db.prepare(`SELECT t.*, c.name AS client_name, u.name AS assignee_name FROM tickets t
+    LEFT JOIN clients c ON c.id = t.client_id LEFT JOIN users u ON u.id = t.assignee_id WHERE t.id = ?`).get(req.params.id)
   if (!t) return res.status(404).json({ error: true, message: 'Not found' })
   const comments = db.prepare(`SELECT * FROM ticket_comments WHERE ticket_id = ? ORDER BY created_at ASC`).all(req.params.id)
   const time_entries = db.prepare(`SELECT * FROM ticket_time_entries WHERE ticket_id = ? ORDER BY started_at DESC`).all(req.params.id)
-  res.json({ data: { ...t, comments, time_entries } })
+  const invoices = db.prepare(`SELECT id, number, total, status, date FROM invoices WHERE notes LIKE ? OR notes LIKE ? ORDER BY created_at DESC LIMIT 10`)
+    .all(`%${req.params.id.slice(0, 8)}%`, `%ticket ${req.params.id.slice(0, 8)}%`)
+  res.json({ data: { ...enrich(t), comments, time_entries, linked_invoices: invoices } })
 })
 
 ticketsRouter.post('/', requireRole('staff'), (req, res, next) => {
@@ -81,19 +149,18 @@ ticketsRouter.post('/', requireRole('staff'), (req, res, next) => {
     const body = TicketBody.parse(req.body)
     const id = uid()
     const ts = now()
-    db.prepare(
-      `INSERT INTO tickets (id, title, description, status, priority, category, tags, client_id, assignee_id, notes, due_date, estimated_minutes, created_by, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).run(
+    let sla_due_at = null
+    if (body.sla_hours) sla_due_at = new Date(Date.now() + body.sla_hours * 3600000).toISOString()
+    db.prepare(`INSERT INTO tickets (id, title, description, status, priority, category, tags, client_id, assignee_id, notes, due_date, estimated_minutes, created_by, created_at, updated_at, warranty, sla_hours, sla_due_at, parts_json, is_template)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, body.title, body.description || null, body.status, body.priority, body.category || null,
       body.tags || null, body.client_id || null, body.assignee_id || null, body.notes || null,
-      body.due_date || null, body.estimated_minutes ?? null,
-      req.user.sub, ts, ts
+      body.due_date || null, body.estimated_minutes ?? null, req.user.sub, ts, ts,
+      body.warranty ? 1 : 0, body.sla_hours ?? null, sla_due_at,
+      body.parts ? JSON.stringify(body.parts) : null, body.is_template ? 1 : 0
     )
-    res.status(201).json({ data: db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) })
-  } catch (e) {
-    next(e)
-  }
+    res.status(201).json({ data: enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(id)) })
+  } catch (e) { next(e) }
 })
 
 ticketsRouter.patch('/:id', requireRole('staff'), (req, res, next) => {
@@ -105,14 +172,17 @@ ticketsRouter.patch('/:id', requireRole('staff'), (req, res, next) => {
     let resolved_at = existing.resolved_at
     if (['resolved', 'closed'].includes(nextStatus) && !resolved_at) resolved_at = now()
     if (!['resolved', 'closed'].includes(nextStatus)) resolved_at = null
-    db.prepare(
-      `UPDATE tickets SET title=?, description=?, status=?, priority=?, category=?, tags=?, client_id=?, assignee_id=?, notes=?, due_date=?, estimated_minutes=?, updated_at=?, resolved_at=?
-       WHERE id=?`
-    ).run(
+    let sla_hours = body.sla_hours !== undefined ? body.sla_hours : existing.sla_hours
+    let sla_due_at = existing.sla_due_at
+    if (body.sla_hours !== undefined) {
+      if (body.sla_hours) sla_due_at = new Date(new Date(existing.created_at).getTime() + body.sla_hours * 3600000).toISOString()
+      else { sla_hours = null; sla_due_at = null }
+    }
+    const parts_json = body.parts !== undefined ? JSON.stringify(body.parts) : existing.parts_json
+    db.prepare(`UPDATE tickets SET title=?, description=?, status=?, priority=?, category=?, tags=?, client_id=?, assignee_id=?, notes=?, due_date=?, estimated_minutes=?, updated_at=?, resolved_at=?, warranty=?, sla_hours=?, sla_due_at=?, parts_json=? WHERE id=?`).run(
       body.title ?? existing.title,
       body.description !== undefined ? body.description : existing.description,
-      nextStatus,
-      body.priority ?? existing.priority,
+      nextStatus, body.priority ?? existing.priority,
       body.category !== undefined ? body.category : existing.category,
       body.tags !== undefined ? body.tags : existing.tags,
       body.client_id !== undefined ? body.client_id : existing.client_id,
@@ -120,41 +190,42 @@ ticketsRouter.patch('/:id', requireRole('staff'), (req, res, next) => {
       body.notes !== undefined ? body.notes : existing.notes,
       body.due_date !== undefined ? body.due_date : existing.due_date,
       body.estimated_minutes !== undefined ? body.estimated_minutes : existing.estimated_minutes,
-      now(),
-      resolved_at,
-      req.params.id
+      now(), resolved_at,
+      body.warranty !== undefined ? (body.warranty ? 1 : 0) : (existing.warranty || 0),
+      sla_hours, sla_due_at, parts_json, req.params.id
     )
-    res.json({ data: db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id) })
-  } catch (e) {
-    next(e)
-  }
+    res.json({ data: enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id)) })
+  } catch (e) { next(e) }
 })
 
 ticketsRouter.post('/:id/comments', requireRole('staff'), (req, res, next) => {
   try {
-    const body = z.object({
-      text: z.string().min(1),
-      internal: z.boolean().optional(),
-      time_logged_seconds: z.number().int().optional(),
-    }).parse(req.body)
-    const t = db.prepare('SELECT id FROM tickets WHERE id = ?').get(req.params.id)
-    if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+    const body = z.object({ text: z.string().min(1), internal: z.boolean().optional(), time_logged_seconds: z.number().int().optional() }).parse(req.body)
+    if (!db.prepare('SELECT id FROM tickets WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: true, message: 'Not found' })
     const id = uid()
     const logged = body.time_logged_seconds || 0
-    db.prepare(
-      `INSERT INTO ticket_comments (id, ticket_id, author_id, author_name, text, internal, time_logged_seconds, created_at)
-       VALUES (?,?,?,?,?,?,?,?)`
-    ).run(id, req.params.id, req.user.sub, req.user.name || req.user.email, body.text, body.internal ? 1 : 0, logged, now())
-    if (logged > 0) {
-      db.prepare('UPDATE tickets SET time_spent_seconds = time_spent_seconds + ?, updated_at=? WHERE id=?')
-        .run(logged, now(), req.params.id)
-    } else {
-      db.prepare('UPDATE tickets SET updated_at=? WHERE id=?').run(now(), req.params.id)
-    }
+    db.prepare(`INSERT INTO ticket_comments (id, ticket_id, author_id, author_name, text, internal, time_logged_seconds, created_at) VALUES (?,?,?,?,?,?,?,?)`)
+      .run(id, req.params.id, req.user.sub, req.user.name || req.user.email, body.text, body.internal ? 1 : 0, logged, now())
+    if (logged > 0) db.prepare('UPDATE tickets SET time_spent_seconds = time_spent_seconds + ?, updated_at=? WHERE id=?').run(logged, now(), req.params.id)
+    else db.prepare('UPDATE tickets SET updated_at=? WHERE id=?').run(now(), req.params.id)
     res.status(201).json({ data: db.prepare('SELECT * FROM ticket_comments WHERE id = ?').get(id) })
-  } catch (e) {
-    next(e)
-  }
+  } catch (e) { next(e) }
+})
+
+ticketsRouter.post('/:id/clone', requireRole('staff'), (req, res, next) => {
+  try {
+    const src = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id)
+    if (!src) return res.status(404).json({ error: true, message: 'Not found' })
+    const id = uid()
+    const ts = now()
+    let sla_due_at = src.sla_hours ? new Date(Date.now() + src.sla_hours * 3600000).toISOString() : null
+    db.prepare(`INSERT INTO tickets (id, title, description, status, priority, category, tags, client_id, assignee_id, notes, due_date, estimated_minutes, created_by, created_at, updated_at, warranty, sla_hours, sla_due_at, parts_json, is_template)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`).run(
+      id, src.title, src.description, 'open', src.priority, src.category, src.tags, src.client_id, src.assignee_id,
+      src.notes, null, src.estimated_minutes, req.user.sub, ts, ts, src.warranty || 0, src.sla_hours, sla_due_at, src.parts_json
+    )
+    res.status(201).json({ data: enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(id)) })
+  } catch (e) { next(e) }
 })
 
 mountTicketTimers(ticketsRouter)
