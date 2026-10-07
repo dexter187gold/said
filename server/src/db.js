@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   client_id TEXT NOT NULL REFERENCES clients(id),
   date TEXT NOT NULL,
   due_date TEXT,
+  doc_type TEXT NOT NULL DEFAULT 'invoice',
   status TEXT NOT NULL DEFAULT 'unpaid',
   notes TEXT,
   account_type TEXT,
@@ -182,6 +183,7 @@ for (const [col, def] of [
 
 const invCols = db.prepare(`PRAGMA table_info(invoices)`).all().map((c) => c.name)
 if (!invCols.includes('template_id')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN template_id TEXT`) } catch {} }
+if (!invCols.includes('doc_type')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'invoice'`) } catch {} }
 
 const clientCols = db.prepare(`PRAGMA table_info(clients)`).all().map((c) => c.name)
 if (!clientCols.includes('vat_number')) { try { db.exec(`ALTER TABLE clients ADD COLUMN vat_number TEXT`) } catch {} }
