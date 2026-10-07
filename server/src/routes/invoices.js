@@ -15,6 +15,7 @@ const Line = z.object({
 
 const InvoiceBody = z.object({
   client_id: z.string().min(1),
+  doc_type: z.enum(['invoice', 'quote', 'credit']).default('invoice'),
   date: z.string().optional(),
   due_date: z.string().optional().nullable(),
   status: z.enum(['unpaid', 'partial', 'paid', 'overdue', 'cancelled']).default('unpaid'),
@@ -38,10 +39,11 @@ function loadInvoice(id) {
   return { ...inv, lines, payments, client }
 }
 
-function nextNumber() {
+function nextNumber(docType = 'invoice') {
   const y = new Date().getFullYear()
-  const c = db.prepare(`SELECT COUNT(*) AS c FROM invoices WHERE number LIKE ?`).get(`INV-${y}-%`).c
-  return `INV-${y}-${String(c + 1).padStart(4, '0')}`
+  const prefix = docType === 'quote' ? 'QT' : docType === 'credit' ? 'CN' : 'INV'
+  const c = db.prepare(`SELECT COUNT(*) AS c FROM invoices WHERE number LIKE ?`).get(`${prefix}-${y}-%`).c
+  return `${prefix}-${y}-${String(c + 1).padStart(4, '0')}`
 }
 
 function money(n) {
@@ -52,11 +54,15 @@ function esc(s) {
 }
 
 invoicesRouter.get('/', (req, res) => {
-  const status = req.query.status
-  const sql = status
-    ? `SELECT i.*, c.name AS client_name FROM invoices i LEFT JOIN clients c ON c.id = i.client_id WHERE i.status = ? ORDER BY i.date DESC`
-    : `SELECT i.*, c.name AS client_name FROM invoices i LEFT JOIN clients c ON c.id = i.client_id ORDER BY i.date DESC`
-  res.json({ data: status ? db.prepare(sql).all(status) : db.prepare(sql).all() })
+  const { status, type } = req.query
+  const clauses = []
+  const params = []
+  if (type) { clauses.push('i.doc_type = ?'); params.push(type) }
+  else { clauses.push("i.doc_type = 'invoice'") }
+  if (status) { clauses.push('i.status = ?'); params.push(status) }
+  const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''
+  const sql = `SELECT i.*, c.name AS client_name FROM invoices i LEFT JOIN clients c ON c.id = i.client_id ${where} ORDER BY i.date DESC`
+  res.json({ data: db.prepare(sql).all(...params) })
 })
 
 invoicesRouter.get('/:id', (req, res) => {
@@ -72,18 +78,18 @@ invoicesRouter.post('/', requireRole('staff'), (req, res, next) => {
     const vat_amount = Math.round(exclusive * body.vat_rate * 100) / 100
     const total = Math.round((exclusive + vat_amount) * 100) / 100
     const id = uid()
-    const number = nextNumber()
+    const number = nextNumber(body.doc_type || 'invoice')
     const date = body.date || now().slice(0, 10)
     db.prepare(
       `INSERT INTO invoices (
         id, number, client_id, date, due_date, status, notes, account_type, devices, service_type, po_number,
-        payment_note, exclusive, vat_amount, total, amount_paid, reminder_at, created_by, created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        payment_note, exclusive, vat_amount, total, amount_paid, reminder_at, created_by, created_at, updated_at, doc_type
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(
       id, number, body.client_id, date, body.due_date || date, body.status,
       body.notes || null, body.account_type || null, body.devices || null, body.service_type || null,
       body.po_number || null, body.payment_note || null, exclusive, vat_amount, total, 0,
-      body.reminder_at || null, req.user.sub, now(), now()
+      body.reminder_at || null, req.user.sub, now(), now(), body.doc_type || 'invoice'
     )
     const insLine = db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price) VALUES (?,?,?,?,?)`)
     for (const l of body.lines) insLine.run(uid(), id, l.description, l.qty, l.price)
