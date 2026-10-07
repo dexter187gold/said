@@ -13,10 +13,7 @@ documentsRouter.get('/templates', (req, res) => {
   let sql = `SELECT id, label, category, business_types, description, is_system, updated_at FROM document_templates WHERE 1=1`
   const params = []
   if (category) { sql += ' AND category = ?'; params.push(category) }
-  if (business) {
-    sql += ` AND (business_types = 'all' OR business_types LIKE ?)`
-    params.push(`%${business}%`)
-  }
+  if (business) { sql += ` AND (business_types = 'all' OR business_types LIKE ?)`; params.push(`%${business}%`) }
   if (q) {
     sql += ' AND (label LIKE ? OR description LIKE ? OR id LIKE ?)'
     const like = `%${q}%`
@@ -24,9 +21,7 @@ documentsRouter.get('/templates', (req, res) => {
   }
   sql += ' ORDER BY category, label'
   const rows = db.prepare(sql).all(...params)
-  const categories = db.prepare(
-    `SELECT category, COUNT(*) AS c FROM document_templates GROUP BY category ORDER BY category`
-  ).all()
+  const categories = db.prepare(`SELECT category, COUNT(*) AS c FROM document_templates GROUP BY category ORDER BY category`).all()
   res.json({ data: rows, categories, total: rows.length })
 })
 
@@ -47,16 +42,12 @@ documentsRouter.post('/templates', requireRole('admin'), (req, res, next) => {
       html: z.string().min(10),
     }).parse(req.body)
     const id = body.id || `custom_${uid().slice(0, 8)}`
-    const existing = db.prepare('SELECT id FROM document_templates WHERE id = ?').get(id)
-    if (existing) return res.status(409).json({ error: true, message: 'Template id already exists' })
-    db.prepare(
-      `INSERT INTO document_templates (id, label, category, business_types, description, html, is_system, updated_at)
-       VALUES (?,?,?,?,?,?,0,?)`
-    ).run(id, body.label, body.category, body.business_types, body.description || null, body.html, now())
+    if (db.prepare('SELECT id FROM document_templates WHERE id = ?').get(id))
+      return res.status(409).json({ error: true, message: 'Template id already exists' })
+    db.prepare(`INSERT INTO document_templates (id, label, category, business_types, description, html, is_system, updated_at) VALUES (?,?,?,?,?,?,0,?)`)
+      .run(id, body.label, body.category, body.business_types, body.description || null, body.html, now())
     res.status(201).json({ data: db.prepare('SELECT * FROM document_templates WHERE id=?').get(id) })
-  } catch (e) {
-    next(e)
-  }
+  } catch (e) { next(e) }
 })
 
 documentsRouter.put('/templates/:id', requireRole('admin'), (req, res, next) => {
@@ -70,21 +61,12 @@ documentsRouter.put('/templates/:id', requireRole('admin'), (req, res, next) => 
     }).parse(req.body)
     const t = db.prepare('SELECT * FROM document_templates WHERE id = ?').get(req.params.id)
     if (!t) return res.status(404).json({ error: true, message: 'Not found' })
-    db.prepare(
-      `UPDATE document_templates SET label=?, category=?, business_types=?, description=?, html=?, updated_at=? WHERE id=?`
-    ).run(
-      body.label ?? t.label,
-      body.category ?? t.category,
-      body.business_types ?? t.business_types,
-      body.description !== undefined ? body.description : t.description,
-      body.html ?? t.html,
-      now(),
-      req.params.id
+    db.prepare(`UPDATE document_templates SET label=?, category=?, business_types=?, description=?, html=?, updated_at=? WHERE id=?`).run(
+      body.label ?? t.label, body.category ?? t.category, body.business_types ?? t.business_types,
+      body.description !== undefined ? body.description : t.description, body.html ?? t.html, now(), req.params.id
     )
     res.json({ data: db.prepare('SELECT * FROM document_templates WHERE id=?').get(req.params.id) })
-  } catch (e) {
-    next(e)
-  }
+  } catch (e) { next(e) }
 })
 
 documentsRouter.delete('/templates/:id', requireRole('admin'), (req, res) => {
@@ -101,6 +83,8 @@ documentsRouter.post('/render', async (req, res, next) => {
       template_id: z.string().min(1),
       variables: z.record(z.any()).default({}),
       format: z.enum(['html', 'pdf']).default('pdf'),
+      watermark: z.boolean().optional(),
+      include_qr: z.boolean().optional(),
     }).parse(req.body)
     const tpl = db.prepare('SELECT * FROM document_templates WHERE id = ?').get(body.template_id)
     if (!tpl) return res.status(404).json({ error: true, message: 'Template not found' })
@@ -115,15 +99,36 @@ documentsRouter.post('/render', async (req, res, next) => {
     if (!vars.bank_name) vars.bank_name = co.bank_name || ''
     if (!vars.account_number) vars.account_number = co.account_number || ''
     if (!vars.branch_code) vars.branch_code = co.branch_code || ''
+    if (!vars.logo_url && co.logo_url) vars.logo_url = co.logo_url
+    if (!vars.logo && co.logo_url) {
+      vars.logo = (co.logo_url.startsWith('data:') || co.logo_url.startsWith('http'))
+        ? `<img src="${co.logo_url}" alt="Logo" style="max-height:64px;max-width:180px" />` : ''
+    }
+    const payRef = vars.invoice_number || vars.number || vars.reference || 'PAY'
+    const payAmount = vars.total || vars.amount || ''
+    const payPayload = encodeURIComponent(
+      `Pay ${co.name || 'SAID'}|Ref:${payRef}|Amt:${payAmount}|Acc:${co.account_number || ''}|Branch:${co.branch_code || ''}`
+    )
+    if (body.include_qr || vars.include_qr === '1') {
+      vars.qr_pay = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${payPayload}" alt="Pay QR" width="120" height="120" />`
+      vars.qr_pay_url = `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${payPayload}`
+    } else {
+      if (!vars.qr_pay) vars.qr_pay = ''
+      if (!vars.qr_pay_url) vars.qr_pay_url = ''
+    }
+    let htmlOut = fill(tpl.html, vars)
+    if (body.watermark) {
+      const mark = `<div style="position:fixed;top:40%;left:10%;font-size:72px;color:rgba(0,0,0,.08);transform:rotate(-30deg);pointer-events:none;z-index:999;font-weight:800;letter-spacing:.1em">DRAFT</div>`
+      htmlOut = htmlOut.includes('</body>') ? htmlOut.replace('</body>', mark + '</body>') : mark + htmlOut
+    }
     const renderId = uid()
-    db.prepare(
-      `INSERT INTO document_renders (id, template_id, variables, created_by, created_at) VALUES (?,?,?,?,?)`
-    ).run(renderId, body.template_id, JSON.stringify(vars), req.user.sub, now())
+    db.prepare(`INSERT INTO document_renders (id, template_id, variables, created_by, created_at) VALUES (?,?,?,?,?)`)
+      .run(renderId, body.template_id, JSON.stringify(vars), req.user.sub, now())
     if (body.format === 'html') {
-      return res.json({ data: { id: renderId, html: fill(tpl.html, vars) } })
+      return res.json({ data: { id: renderId, html: htmlOut, qr_pay_url: vars.qr_pay_url || null } })
     }
     try {
-      const pdf = await htmlToPdf(tpl.html, vars)
+      const pdf = await htmlToPdf(htmlOut, {})
       res.setHeader('Content-Type', 'application/pdf')
       res.setHeader('Content-Disposition', `attachment; filename="${body.template_id}.pdf"`)
       return res.send(pdf)
@@ -133,35 +138,19 @@ documentsRouter.post('/render', async (req, res, next) => {
       err.status = 503
       throw err
     }
-  } catch (e) {
-    next(e)
-  }
+  } catch (e) { next(e) }
 })
 
 documentsRouter.post('/reseed', requireRole('admin'), (req, res, next) => {
   try {
-    const ins = db.prepare(
-      `INSERT OR REPLACE INTO document_templates (id, label, category, business_types, description, html, is_system, updated_at)
-       VALUES (?,?,?,?,?,?,1,?)`
-    )
+    const ins = db.prepare(`INSERT OR REPLACE INTO document_templates (id, label, category, business_types, description, html, is_system, updated_at) VALUES (?,?,?,?,?,?,1,?)`)
     const ts = now()
-    const tx = db.transaction(() => {
-      for (const t of TEMPLATE_SEED) {
-        ins.run(t.id, t.label, t.category, t.business_types, t.description || null, t.html, ts)
-      }
-    })
+    const tx = db.transaction(() => { for (const t of TEMPLATE_SEED) ins.run(t.id, t.label, t.category, t.business_types, t.description || null, t.html, ts) })
     tx()
-    const count = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
-    res.json({ ok: true, count })
-  } catch (e) {
-    next(e)
-  }
+    res.json({ ok: true, count: db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c })
+  } catch (e) { next(e) }
 })
 
 documentsRouter.get('/categories', (_req, res) => {
-  res.json({
-    data: db.prepare(
-      `SELECT category, COUNT(*) AS count FROM document_templates GROUP BY category ORDER BY category`
-    ).all(),
-  })
+  res.json({ data: db.prepare(`SELECT category, COUNT(*) AS count FROM document_templates GROUP BY category ORDER BY category`).all() })
 })
