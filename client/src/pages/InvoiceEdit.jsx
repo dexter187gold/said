@@ -1,13 +1,23 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
 
 export default function InvoiceEdit() {
   const { id } = useParams()
+  const location = useLocation()
   const isNew = !id || id === 'new'
   const nav = useNavigate()
   const { notify } = useAuth()
+
+  const pathType = location.pathname.startsWith('/quotes')
+    ? 'quote'
+    : location.pathname.startsWith('/credits')
+      ? 'credit'
+      : 'invoice'
+  const listPath = pathType === 'quote' ? '/quotes' : pathType === 'credit' ? '/credits' : '/invoices'
+  const typeLabel = pathType === 'quote' ? 'Quote' : pathType === 'credit' ? 'Credit note' : 'Invoice'
+
   const [clients, setClients] = useState([])
   const [clientId, setClientId] = useState('')
   const [status, setStatus] = useState('unpaid')
@@ -50,6 +60,7 @@ export default function InvoiceEdit() {
 
   const body = () => ({
     client_id: clientId,
+    doc_type: loaded?.doc_type || pathType,
     status,
     notes,
     devices,
@@ -66,8 +77,8 @@ export default function InvoiceEdit() {
       if (!clientId) throw new Error('Select a client')
       if (isNew) {
         const r = await api('/api/v1/invoices', { method: 'POST', body: body() })
-        notify('Invoice created')
-        nav(`/invoices/${r.data.id}`)
+        notify(`${typeLabel} created`)
+        nav(`${listPath}/${r.data.id}`)
       } else {
         await api(`/api/v1/invoices/${id}`, { method: 'PUT', body: body() })
         notify('Saved')
@@ -106,13 +117,16 @@ export default function InvoiceEdit() {
 
   return (
     <div>
+      <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-brand">
+        {typeLabel} module
+      </div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h1 className="text-2xl font-extrabold">{isNew ? 'New invoice' : loaded?.number || 'Invoice'}</h1>
-          <p className="text-sm text-slate-500">Info blocks · VAT 15%</p>
+          <h1 className="text-2xl font-extrabold">{isNew ? `New ${typeLabel.toLowerCase()}` : (loaded?.number || typeLabel)}</h1>
+          <p className="text-sm text-slate-500">VAT 15% · {pathType}</p>
         </div>
         <div className="flex gap-2">
-          <Link className="btn-outline" to="/invoices">Back</Link>
+          <Link className="btn-outline" to={listPath}>Back</Link>
           {!isNew && <button type="button" className="btn-outline" onClick={pdf}>PDF</button>}
         </div>
       </div>
@@ -188,10 +202,10 @@ export default function InvoiceEdit() {
           </div>
         </div>
 
-        <button className="btn-primary" type="submit">Save invoice</button>
+        <button className="btn-primary" type="submit">{isNew ? `Create ${typeLabel.toLowerCase()}` : 'Save'}</button>
       </form>
 
-      {!isNew && (
+      {!isNew && pathType === 'invoice' && (
         <div className="card mt-4 p-4">
           <h3 className="mb-2 text-xs font-bold uppercase text-slate-500">Log payment</h3>
           <div className="flex flex-wrap gap-2">
