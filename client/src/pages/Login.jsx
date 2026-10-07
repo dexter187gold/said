@@ -16,10 +16,10 @@ function strength(pw) {
 }
 
 export default function Login() {
-  const { login, register, verifyOtp, sendOtp, loginGoogle, user, setupComplete, oauthConfig, notify } = useAuth()
+  const { login, login2fa, register, verifyOtp, sendOtp, loginGoogle, user, setupComplete, oauthConfig, notify } = useAuth()
   const { prefs, setPrefs } = useTheme()
   const nav = useNavigate()
-  const [mode, setMode] = useState('in')
+  const [mode, setMode] = useState('in') // in | up | otp | 2fa
   const [form, setForm] = useState({ email: '', password: '', name: '', phone: '', otp: '' })
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState({})
@@ -44,7 +44,7 @@ export default function Login() {
   }, [splash])
 
   useEffect(() => {
-    if (!oauthConfig.google_enabled || !oauthConfig.google_client_id || mode === 'otp') return
+    if (!oauthConfig.google_enabled || !oauthConfig.google_client_id || mode === 'otp' || mode === '2fa') return
     const scriptId = 'gis-client'
     const init = () => {
       if (!window.google?.accounts?.id || !googleBtn.current) return
@@ -79,21 +79,19 @@ export default function Login() {
       s.async = true
       s.onload = init
       document.body.appendChild(s)
-    } else {
-      init()
-    }
+    } else init()
   }, [oauthConfig, mode, prefs.mode])
 
   const validate = () => {
     const e = {}
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Enter a valid email'
+    if (mode !== 'otp' && mode !== '2fa' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Enter a valid email'
     if (mode === 'up') {
       if (!form.name || form.name.trim().length < 2) e.name = 'Full name required'
       if (form.password.length < 8) e.password = 'At least 8 characters'
       else if (!/[A-Za-z]/.test(form.password) || !/[0-9]/.test(form.password)) e.password = 'Use letters and numbers'
     } else if (mode === 'in') {
       if (!form.password) e.password = 'Password required'
-    } else if (mode === 'otp') {
+    } else if (mode === 'otp' || mode === '2fa') {
       if (!/^\d{6}$/.test(form.otp)) e.otp = 'Enter the 6-digit code'
     }
     setErrors(e)
@@ -114,6 +112,12 @@ export default function Login() {
       if (mode === 'in') {
         try {
           const data = await login(form.email, form.password)
+          if (data?.requires_2fa) {
+            setMode('2fa')
+            setDevOtp(data.dev_otp || '')
+            notify('Enter the 2FA code sent to your email')
+            return
+          }
           afterAuth(data)
         } catch (err) {
           if (err.code === 'EMAIL_NOT_VERIFIED' || err.status === 403) {
@@ -132,6 +136,9 @@ export default function Login() {
         setDevOtp(r.data?.dev_otp || '')
         setMode('otp')
         notify(r.data?.message || 'OTP sent to your email')
+      } else if (mode === '2fa') {
+        const data = await login2fa(form.email, form.otp)
+        afterAuth(data)
       } else {
         const data = await verifyOtp(form.email, form.otp, 'register')
         afterAuth(data)
@@ -180,16 +187,16 @@ export default function Login() {
         <div className="mb-5 flex flex-col items-center gap-2">
           <AppLogo size={56} />
           <h1 className="text-xl font-extrabold tracking-tight">
-            {mode === 'otp' ? 'Verify email' : mode === 'up' ? 'Create account' : 'Sign in'}
+            {mode === '2fa' ? 'Two-factor code' : mode === 'otp' ? 'Verify email' : mode === 'up' ? 'Create account' : 'Sign in'}
           </h1>
           <p className="text-center text-xs text-slate-500">
-            {mode === 'otp'
+            {mode === 'otp' || mode === '2fa'
               ? `Enter the 6-digit code sent to ${form.email}`
-              : 'OAuth · email OTP · company onboarding'}
+              : 'OAuth · email OTP · 2FA · company onboarding'}
           </p>
         </div>
 
-        {mode !== 'otp' && oauthConfig.google_enabled && (
+        {mode !== 'otp' && mode !== '2fa' && oauthConfig.google_enabled && (
           <div className="mb-4 flex flex-col items-center gap-2">
             <div ref={googleBtn} className="min-h-[40px] w-full flex justify-center" />
             <div className="flex w-full items-center gap-2 text-[10px] uppercase tracking-wide text-slate-400">
@@ -198,12 +205,6 @@ export default function Login() {
               <span className="h-px flex-1 bg-slate-200 dark:bg-slate-700" />
             </div>
           </div>
-        )}
-
-        {mode !== 'otp' && !oauthConfig.google_enabled && (
-          <p className="mb-3 text-center text-[11px] text-slate-400">
-            Google sign-in when <code className="text-accent">GOOGLE_CLIENT_ID</code> is set
-          </p>
         )}
 
         <form className="space-y-3" onSubmit={submit} noValidate>
@@ -223,7 +224,7 @@ export default function Login() {
             </>
           )}
 
-          {mode !== 'otp' && (
+          {mode !== 'otp' && mode !== '2fa' && (
             <>
               <div>
                 <label className="label">Email</label>
@@ -248,7 +249,7 @@ export default function Login() {
             </>
           )}
 
-          {mode === 'otp' && (
+          {(mode === 'otp' || mode === '2fa') && (
             <div>
               <label className="label">One-time code</label>
               <input className="input text-center text-2xl tracking-[0.4em] font-bold" inputMode="numeric"
@@ -260,20 +261,22 @@ export default function Login() {
                   Dev OTP: <strong className="tracking-widest">{devOtp}</strong> (SMTP not configured)
                 </p>
               )}
-              <button type="button" className="btn-ghost !text-xs mt-2 w-full" disabled={busy} onClick={resend}>
-                Resend code
-              </button>
+              {mode === 'otp' && (
+                <button type="button" className="btn-ghost !text-xs mt-2 w-full" disabled={busy} onClick={resend}>
+                  Resend code
+                </button>
+              )}
             </div>
           )}
 
           <button className="btn-primary w-full" type="submit" disabled={busy}>
-            {busy ? 'Please wait…' : mode === 'otp' ? 'Verify & continue' : mode === 'up' ? 'Create account' : 'Sign in'}
+            {busy ? 'Please wait…' : mode === 'otp' || mode === '2fa' ? 'Verify & continue' : mode === 'up' ? 'Create account' : 'Sign in'}
           </button>
         </form>
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-          {mode === 'otp' ? (
-            <button type="button" className="hover:text-accent" onClick={() => setMode('up')}>← Back</button>
+          {mode === 'otp' || mode === '2fa' ? (
+            <button type="button" className="hover:text-accent" onClick={() => setMode(mode === '2fa' ? 'in' : 'up')}>← Back</button>
           ) : (
             <button type="button" className="hover:text-accent" onClick={() => setMode(mode === 'in' ? 'up' : 'in')}>
               {mode === 'in' ? 'Need an account? Register' : 'Have an account? Sign in'}
