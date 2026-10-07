@@ -9,7 +9,7 @@ const links = [
   { to: '/invoices', label: 'Invoices' },
   { to: '/tickets', label: 'Tickets' },
   { to: '/clients', label: 'Clients' },
-  { to: '/documents', label: 'Documents' },
+  { to: '/documents', label: 'Doc generator' },
   { to: '/settings', label: 'Settings' },
 ]
 
