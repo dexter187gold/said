@@ -9,6 +9,7 @@ import { clientsRouter } from './routes/clients.js'
 import { invoicesRouter } from './routes/invoices.js'
 import { ticketsRouter } from './routes/tickets.js'
 import { documentsRouter } from './routes/documents.js'
+import { settingsRouter } from './routes/settings.js'
 import { errorHandler, notFound } from './middleware/error.js'
 import { requireAuth } from './middleware/auth.js'
 import { db } from './db.js'
@@ -18,10 +19,11 @@ seedIfEmpty()
 
 const app = express()
 app.use(cors({ origin: true, credentials: true }))
-app.use(express.json({ limit: '4mb' }))
+app.use(express.json({ limit: '8mb' }))
 
 app.get('/api/v1/health', (_req, res) => {
-  res.json({ ok: true, service: 'said', version: '1.0.0' })
+  const tplCount = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
+  res.json({ ok: true, service: 'said', version: '1.1.0', templates: tplCount })
 })
 
 app.get('/api/v1/company', requireAuth, (_req, res) => {
@@ -41,6 +43,7 @@ app.use('/api/v1/clients', clientsRouter)
 app.use('/api/v1/invoices', invoicesRouter)
 app.use('/api/v1/tickets', ticketsRouter)
 app.use('/api/v1/documents', documentsRouter)
+app.use('/api/v1/settings', settingsRouter)
 
 const clientDist = path.join(__dirname, '../../client/dist')
 if (fs.existsSync(clientDist)) {
