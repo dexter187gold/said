@@ -109,8 +109,117 @@ settingsRouter.get('/dashboard', (_req, res) => {
     SELECT t.id, t.title, t.status, t.priority, t.time_spent_seconds, c.name AS client_name
     FROM tickets t LEFT JOIN clients c ON c.id=t.client_id WHERE COALESCE(t.is_template,0)=0
     ORDER BY t.updated_at DESC LIMIT 8`).all()
-  res.json({ data: { invoices: invStats, monthly, cashflow, tickets: ticketStats, tech_util: techUtil,
-    revenue_by_category: revenueByCategory, profit_by_job: profitByJob, clients, templates, recentInvoices, recentTickets } })
+
+  // EA-Q3: smart suggestions
+  const suggestions = []
+  const readyToBill = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM tickets
+       WHERE COALESCE(is_template,0)=0 AND status IN ('resolved','closed')
+       AND time_spent_seconds >= 60
+       AND client_id IS NOT NULL
+       AND id NOT IN (SELECT COALESCE(converted_from_id,'') FROM invoices WHERE converted_from_id IS NOT NULL)`
+    )
+    .get().c
+  if (readyToBill > 0) {
+    suggestions.push({
+      id: 'bill_tickets',
+      severity: 'info',
+      title: `${readyToBill} ticket(s) ready to invoice`,
+      detail: 'Resolved/closed with logged time and a client — bill from Tickets.',
+      href: '/tickets',
+    })
+  }
+  const overdueCount = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM invoices
+       WHERE COALESCE(doc_type,'invoice')='invoice' AND status IN ('unpaid','partial','overdue')
+       AND due_date IS NOT NULL AND due_date < date('now')`
+    )
+    .get().c
+  if (overdueCount > 0) {
+    suggestions.push({
+      id: 'overdue',
+      severity: 'warn',
+      title: `${overdueCount} overdue invoice(s)`,
+      detail: 'Past due date and still unpaid — send reminders or mark overdue.',
+      href: '/ageing',
+    })
+  }
+  const slaBreach = Number(ticketStats.sla_breached || 0)
+  if (slaBreach > 0) {
+    suggestions.push({
+      id: 'sla',
+      severity: 'warn',
+      title: `${slaBreach} SLA breach(es)`,
+      detail: 'Open tickets past SLA due — prioritise or extend SLA.',
+      href: '/tickets',
+    })
+  }
+  const creditWarn = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM clients c
+       WHERE c.credit_limit IS NOT NULL AND c.credit_limit > 0
+       AND (
+         SELECT COALESCE(SUM(i.total - i.amount_paid),0) FROM invoices i
+         WHERE i.client_id = c.id AND COALESCE(i.doc_type,'invoice')='invoice'
+         AND i.status IN ('unpaid','partial','overdue')
+       ) > c.credit_limit`
+    )
+    .get().c
+  if (creditWarn > 0) {
+    suggestions.push({
+      id: 'credit_limit',
+      severity: 'warn',
+      title: `${creditWarn} client(s) over credit limit`,
+      detail: 'Outstanding balance exceeds credit limit.',
+      href: '/clients',
+    })
+  }
+  const noClientTickets = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM tickets
+       WHERE COALESCE(is_template,0)=0 AND status NOT IN ('resolved','closed','archived')
+       AND (client_id IS NULL OR client_id = '')`
+    )
+    .get().c
+  if (noClientTickets > 0) {
+    suggestions.push({
+      id: 'no_client',
+      severity: 'info',
+      title: `${noClientTickets} open ticket(s) without client`,
+      detail: 'Assign a client before billing.',
+      href: '/tickets',
+    })
+  }
+
+  const avgCollected =
+    monthly.length > 0
+      ? monthly.reduce((s, m) => s + Number(m.collected || 0), 0) / monthly.length
+      : 0
+  const forecast = {
+    next_month_collected_est: Math.round(avgCollected * 100) / 100,
+    outstanding: Number(invStats.outstanding || 0),
+    method: 'avg_monthly_collected',
+  }
+
+  res.json({
+    data: {
+      invoices: invStats,
+      monthly,
+      cashflow,
+      tickets: ticketStats,
+      tech_util: techUtil,
+      revenue_by_category: revenueByCategory,
+      profit_by_job: profitByJob,
+      clients,
+      templates,
+      recentInvoices,
+      recentTickets,
+      suggestions,
+      forecast,
+    },
+  })
 })
 
 settingsRouter.get('/export/:module', (req, res) => {

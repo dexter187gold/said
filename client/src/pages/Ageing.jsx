@@ -27,11 +27,41 @@ export default function Ageing() {
   const markOverdue = async () => {
     setBusy(true)
     try {
-      const r = await api('/api/v1/invoices/mark-overdue', { method: 'POST' })
-      notify(`Marked ${r.data.marked} invoices overdue`)
+      try {
+        const r = await api('/api/v1/insight/mark-overdue', { method: 'POST' })
+        notify(`Marked ${r.data.updated} invoices overdue`)
+      } catch {
+        const r = await api('/api/v1/invoices/mark-overdue', { method: 'POST' })
+        notify(`Marked ${r.data.marked ?? r.data.updated} invoices overdue`)
+      }
       load()
-    } catch (e) { notify(e.message, 'error') }
-    finally { setBusy(false) }
+    } catch (e) {
+      notify(e.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const sendReminders = async () => {
+    setBusy(true)
+    try {
+      const due = await api('/api/v1/insight/reminders/due?days=7')
+      const ids = (due.data || []).map((x) => x.id)
+      if (!ids.length) {
+        notify('No invoices due for reminder')
+        return
+      }
+      const r = await api('/api/v1/insight/reminders/bulk', {
+        method: 'POST',
+        body: { invoice_ids: ids, channel: 'email' },
+      })
+      notify(`Logged ${r.data.sent} reminder(s)`)
+      load()
+    } catch (e) {
+      notify(e.message, 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const fmt = (n) => `R ${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -41,9 +71,18 @@ export default function Ageing() {
     <div className="space-y-3">
       <PageHeader
         title="Debtors ageing"
-        subtitle="Outstanding invoices by age bucket"
+        subtitle="EA-Q3 · outstanding by age · reminders · mark overdue"
         meta={[data?.as_of ? `As of ${data.as_of}` : '—', fmt(grand)]}
-        actions={<button type="button" className="btn-outline !text-xs" disabled={busy} onClick={markOverdue}>Mark overdue</button>}
+        actions={
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" className="btn-outline !text-xs" disabled={busy} onClick={markOverdue}>
+              Mark overdue
+            </button>
+            <button type="button" className="btn-outline !text-xs" disabled={busy} onClick={sendReminders}>
+              Log reminders (7d)
+            </button>
+          </div>
+        }
       />
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {BUCKETS.map(([key, label]) => (

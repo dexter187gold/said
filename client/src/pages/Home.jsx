@@ -67,14 +67,19 @@ function fmtH(sec) {
 export default function Home() {
   const { notify } = useAuth()
   const [d, setD] = useState(null)
+  const [busy, setBusy] = useState(null)
+
+  const load = () => api('/api/v1/settings/dashboard').then((r) => setD(r.data)).catch(() => {})
 
   useEffect(() => {
-    api('/api/v1/settings/dashboard').then((r) => setD(r.data)).catch(() => {})
+    load()
   }, [])
 
   const inv = d?.invoices || {}
   const tix = d?.tickets || {}
   const rate = 450
+  const suggestions = d?.suggestions || []
+  const forecast = d?.forecast || {}
 
   const exportCsv = async (mod) => {
     try {
@@ -91,26 +96,90 @@ export default function Home() {
     } catch (e) { notify(e.message, 'error') }
   }
 
+  const markOverdue = async () => {
+    setBusy('overdue')
+    try {
+      const r = await api('/api/v1/insight/mark-overdue', { method: 'POST' })
+      notify(`Marked ${r.data.updated} invoice(s) overdue`)
+      load()
+    } catch (e) {
+      notify(e.message, 'error')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const runRecurring = async () => {
+    setBusy('recurring')
+    try {
+      const r = await api('/api/v1/insight/recurring/run', { method: 'POST' })
+      notify(`Created ${r.data.created} recurring invoice(s)`)
+      load()
+    } catch (e) {
+      notify(e.message, 'error')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <PageHeader
         title="Dashboard"
-        subtitle="Q3 · cashflow · utilisation · profit by job · CSV export"
+        subtitle="EA-Q3 · suggestions · forecast · cashflow · reminders · recurring"
         meta={[`${fmt(inv.revenue)} revenue`, `${fmt(inv.outstanding)} outstanding`, `${tix.open || 0} open tickets`]}
         actions={
           <div className="flex flex-wrap gap-1.5">
             {['invoices', 'clients', 'tickets', 'payments'].map((m) => (
               <button key={m} type="button" className="btn-outline !text-[10px] !py-1 capitalize" onClick={() => exportCsv(m)}>CSV {m}</button>
             ))}
+            <button type="button" className="btn-outline !text-[10px] !py-1" disabled={!!busy} onClick={markOverdue}>
+              {busy === 'overdue' ? '…' : 'Mark overdue'}
+            </button>
+            <button type="button" className="btn-outline !text-[10px] !py-1" disabled={!!busy} onClick={runRecurring}>
+              {busy === 'recurring' ? '…' : 'Run recurring'}
+            </button>
           </div>
         }
       />
+
+      {suggestions.length > 0 && (
+        <div className="card p-3 space-y-2">
+          <h2 className="text-sm font-bold">Smart suggestions</h2>
+          <ul className="space-y-1.5">
+            {suggestions.map((s) => (
+              <li
+                key={s.id}
+                className={`flex flex-wrap items-start justify-between gap-2 rounded-lg px-3 py-2 text-xs ${
+                  s.severity === 'warn'
+                    ? 'bg-amber-500/10 border border-amber-500/20'
+                    : 'bg-accent/5 border border-accent/15'
+                }`}
+              >
+                <div>
+                  <div className="font-semibold">{s.title}</div>
+                  <div className="text-slate-500">{s.detail}</div>
+                </div>
+                {s.href && (
+                  <Link to={s.href} className="btn-outline !text-[10px] !py-0.5 shrink-0">
+                    Open
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Revenue" value={fmt(inv.revenue)} sub={`${inv.invoices || inv.total || 0} invoices`} to="/invoices" />
         <Stat label="Collected" value={fmt(inv.collected)} sub={`${inv.paid || 0} paid`} />
         <Stat label="Outstanding" value={fmt(inv.outstanding)} sub={`${(inv.unpaid || 0) + (inv.overdue || 0)} open`} to="/ageing" />
-        <Stat label="Quotes" value={inv.quotes || 0} to="/quotes" />
+        <Stat
+          label="Forecast (next mo)"
+          value={fmt(forecast.next_month_collected_est)}
+          sub="avg collected"
+        />
         <Stat label="Open tickets" value={tix.open || 0} sub={tix.sla_breached ? `${tix.sla_breached} SLA` : 'SLA ok'} to="/tickets" />
         <Stat label="Hours logged" value={fmtH(tix.time_seconds)} sub={`${tix.urgent || 0} urgent`} to="/tickets" />
       </div>
