@@ -13,6 +13,7 @@ const links = [
   { to: '/credits', label: 'Credit notes', icon: '↺' },
   { to: '/tickets', label: 'Tickets', icon: '◉' },
   { to: '/ageing', label: 'Ageing', icon: '▦' },
+  { to: '/money', label: 'Money', icon: '◈' },
   { to: '/clients', label: 'Clients', icon: '◎' },
   { to: '/documents', label: 'Doc generator', icon: '▤' },
   { to: '/settings', label: 'Settings', icon: '⚙' },

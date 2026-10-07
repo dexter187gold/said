@@ -71,10 +71,11 @@ export default function Ageing() {
     <div className="space-y-3">
       <PageHeader
         title="Debtors ageing"
-        subtitle="EA-Q3 · outstanding by age · reminders · mark overdue"
+        subtitle="Hermes-Metal · outstanding by age · Money desk · mark overdue"
         meta={[data?.as_of ? `As of ${data.as_of}` : '—', fmt(grand)]}
         actions={
           <div className="flex flex-wrap gap-1.5">
+            <Link className="btn-outline !text-xs" to="/money">Money desk</Link>
             <button type="button" className="btn-outline !text-xs" disabled={busy} onClick={markOverdue}>
               Mark overdue
             </button>

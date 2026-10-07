@@ -16,6 +16,7 @@ import { documentActionsRouter } from './routes/documentActions.js'
 import { insightRouter } from './routes/insight.js'
 import { platformRouter } from './routes/platform.js'
 import { portalRouter } from './routes/portal.js'
+import { moneyRouter } from './routes/money.js'
 import { errorHandler, notFound } from './middleware/error.js'
 import { requireAuth } from './middleware/auth.js'
 import { rateLimit } from './middleware/rateLimit.js'
@@ -46,7 +47,7 @@ app.get('/api/v1/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'said',
-    version: '1.8.0-q4',
+    version: '1.9.0-hermes',
     templates: tplCount,
     time: new Date().toISOString(),
   })
@@ -84,6 +85,7 @@ app.use('/api/v1/doc-actions', documentActionsRouter)
 app.use('/api/v1/insight', insightRouter)
 app.use('/api/v1/platform', platformRouter)
 app.use('/api/v1/portal', portalRouter)
+app.use('/api/v1/money', moneyRouter)
 
 const clientDist = path.join(__dirname, '../../client/dist')
 if (fs.existsSync(clientDist)) {

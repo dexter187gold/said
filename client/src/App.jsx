@@ -19,6 +19,7 @@ import TemplateDesigner from './pages/TemplateDesigner'
 import About from './pages/About'
 import Platform from './pages/Platform'
 import Portal from './pages/Portal'
+import Money from './pages/Money'
 
 function Guard({ children }) {
   const { user, ready, setupComplete } = useAuth()
@@ -70,6 +71,7 @@ export default function App() {
                 <Route path="/tickets" element={<Tickets />} />
                 <Route path="/clients" element={<Clients />} />
                 <Route path="/ageing" element={<Ageing />} />
+                <Route path="/money" element={<Money />} />
                 <Route path="/documents" element={<Documents />} />
                 <Route path="/documents/designer" element={<TemplateDesigner />} />
                 <Route path="/documents/designer/:id" element={<TemplateDesigner />} />

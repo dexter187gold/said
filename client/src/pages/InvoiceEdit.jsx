@@ -29,6 +29,7 @@ export default function InvoiceEdit() {
   const [paymentNote, setPaymentNote] = useState('Payment due as stated. EFT / cash / card.')
   const [lines, setLines] = useState([{ description: '', qty: 1, price: 0 }])
   const [payAmount, setPayAmount] = useState('')
+  const [payMethod, setPayMethod] = useState('EFT')
   const [loaded, setLoaded] = useState(null)
   const [templateId, setTemplateId] = useState('')
   const [templates, setTemplates] = useState([])
@@ -141,7 +142,7 @@ export default function InvoiceEdit() {
 
   const logPay = async () => {
     try {
-      await api(`/api/v1/invoices/${id}/payments`, { method: 'POST', body: { amount: Number(payAmount), method: 'EFT' } })
+      await api(`/api/v1/invoices/${id}/payments`, { method: 'POST', body: { amount: Number(payAmount), method: payMethod || 'EFT' } })
       setPayAmount('')
       notify('Payment logged')
       const r = await api(`/api/v1/invoices/${id}`)
@@ -297,9 +298,29 @@ export default function InvoiceEdit() {
       {!isNew && pathType === 'invoice' && (
         <div className="card mt-4 p-4">
           <h3 className="mb-2 text-xs font-bold uppercase text-slate-500">Log payment</h3>
-          <div className="flex flex-wrap gap-2">
-            <input className="input max-w-[160px]" type="number" step="0.01" placeholder="Amount" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
+          <div className="flex flex-wrap gap-2 items-center">
+            <input className="input max-w-[120px]" type="number" step="0.01" placeholder="Amount" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
+            <select className="input !w-auto" value={payMethod} onChange={(e) => setPayMethod(e.target.value)}>
+              {['EFT', 'Cash', 'Card', 'SnapScan', 'PayFast', 'Other'].map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
             <button type="button" className="btn-primary" onClick={logPay}>Record</button>
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                try {
+                  const r = await api(`/api/v1/money/eft-ref/${id}`)
+                  window.open(r.data.whatsapp_url, '_blank', 'noopener')
+                  notify(`EFT ref ${r.data.reference}`)
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Send EFT details
+            </button>
           </div>
           {!!loaded?.payments?.length && (
             <ul className="mt-3 space-y-1 text-sm text-slate-500">
