@@ -321,6 +321,21 @@ export default function InvoiceEdit() {
             >
               Send EFT details
             </button>
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                try {
+                  const r = await api(`/api/v1/money/payfast/link/${id}`)
+                  window.open(r.data.url, '_blank', 'noopener')
+                  notify(r.data.configured ? 'PayFast checkout' : 'PayFast sandbox link')
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              PayFast link
+            </button>
           </div>
           {!!loaded?.payments?.length && (
             <ul className="mt-3 space-y-1 text-sm text-slate-500">

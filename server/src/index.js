@@ -47,7 +47,7 @@ app.get('/api/v1/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'said',
-    version: '1.9.0-hermes',
+    version: '1.9.1-hermes',
     templates: tplCount,
     time: new Date().toISOString(),
   })
