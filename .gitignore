@@ -1,8 +1,15 @@
 node_modules/
 dist/
 .env
-*.db
-*.db-journal
 .DS_Store
-server/data/
 client/dist/
+
+# Live SQLite on server (ephemeral on Render free)
+server/data/said.db
+server/data/said.db-wal
+server/data/said.db-shm
+server/data/*.db-journal
+
+# DO commit the bootstrap snapshot so redeploys can restore:
+# server/data/said.bootstrap.db
+!server/data/said.bootstrap.db
