@@ -153,7 +153,19 @@ CREATE TABLE IF NOT EXISTS document_renders (
   created_by TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS otp_codes (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  code TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'register',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `)
+
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email)`) } catch {}
 
 const ticketCols = db.prepare(`PRAGMA table_info(tickets)`).all().map((c) => c.name)
 if (!ticketCols.includes('description')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN description TEXT`) } catch {} }
@@ -168,7 +180,7 @@ for (const [col, def] of [
   ['logo_url', 'TEXT'], ['website', 'TEXT'], ['invoice_prefix', "TEXT DEFAULT 'INV'"],
   ['default_vat_rate', 'REAL DEFAULT 15'], ['currency', "TEXT DEFAULT 'ZAR'"],
   ['business_type', "TEXT DEFAULT 'general'"], ['invoice_template_id', "TEXT DEFAULT 'tax_invoice_full'"],
-  ['footer_note', 'TEXT'], ['terms_default', 'TEXT'],
+  ['footer_note', 'TEXT'], ['terms_default', 'TEXT'], ['setup_complete', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   if (!companyCols.includes(col)) { try { db.exec(`ALTER TABLE company ADD COLUMN ${col} ${def}`) } catch {} }
 }
@@ -189,16 +201,30 @@ const clientCols = db.prepare(`PRAGMA table_info(clients)`).all().map((c) => c.n
 if (!clientCols.includes('vat_number')) { try { db.exec(`ALTER TABLE clients ADD COLUMN vat_number TEXT`) } catch {} }
 if (!clientCols.includes('notes')) { try { db.exec(`ALTER TABLE clients ADD COLUMN notes TEXT`) } catch {} }
 
+const userCols = db.prepare(`PRAGMA table_info(users)`).all().map((c) => c.name)
+for (const [col, def] of [
+  ['email_verified', 'INTEGER NOT NULL DEFAULT 0'],
+  ['oauth_provider', 'TEXT'],
+  ['oauth_id', 'TEXT'],
+  ['phone', 'TEXT'],
+]) {
+  if (!userCols.includes(col)) { try { db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`) } catch {} }
+}
+
 export function uid() { return crypto.randomUUID() }
 export function now() { return new Date().toISOString() }
 
 export function seedIfEmpty() {
+  try {
+    db.prepare("UPDATE users SET email_verified = 1 WHERE email = 'admin@said.local'").run()
+  } catch {}
+
   const n = db.prepare('SELECT COUNT(*) AS c FROM users').get().c
   if (n === 0) {
     const adminId = uid()
     const hash = bcrypt.hashSync('admin123', 10)
-    db.prepare(`INSERT INTO users (id, email, name, password_hash, role, created_at) VALUES (?,?,?,?,?,?)`).run(adminId, 'admin@said.local', 'SAID Admin', hash, 'owner', now())
-    db.prepare(`INSERT OR IGNORE INTO company (id, name, email, phone, vat_number, address, bank_name, account_number, branch_code, business_type) VALUES ('main', 'SA Invoice Desk', 'billing@said.local', '011 000 0000', '4XXXXXXXXX', 'Johannesburg, South Africa', 'FNB', '62800000000', '250655', 'pc_repair')`).run()
+    db.prepare(`INSERT INTO users (id, email, name, password_hash, role, created_at, email_verified) VALUES (?,?,?,?,?,?,1)`).run(adminId, 'admin@said.local', 'SAID Admin', hash, 'owner', now())
+    db.prepare(`INSERT OR IGNORE INTO company (id, name, email, phone, vat_number, address, bank_name, account_number, branch_code, business_type, setup_complete) VALUES ('main', 'SA Invoice Desk', 'billing@said.local', '011 000 0000', '4XXXXXXXXX', 'Johannesburg, South Africa', 'FNB', '62800000000', '250655', 'pc_repair', 1)`).run()
   }
 
   const existing = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
