@@ -12,6 +12,7 @@ const FEATURES = [
   { t: 'Template designer', d: 'Edit HTML templates with live preview and variables.' },
   { t: 'Clients CRM', d: 'Central client records linked to invoices, tickets, and docs.' },
   { t: 'Settings', d: 'Company profile, VAT, bank details, business type defaults.' },
+  { t: '2FA + POPIA', d: 'Email two-factor auth, POPIA data export, SQLite backups, PWA install.' },
 ]
 
 export default function About() {
@@ -20,7 +21,7 @@ export default function About() {
       <PageHeader
         title="About SAID"
         subtitle="SA Invoice Desk — built for South African SMEs"
-        meta={['v1.2.0', 'Express · SQLite · React', 'Puppeteer PDF']}
+        meta={['v1.5.0', 'Q4 · PWA · 2FA · Docker', 'POPIA export']}
       />
 
       <div className="card p-5 sm:p-6 flex flex-col sm:flex-row gap-4 items-start">
@@ -34,6 +35,7 @@ export default function About() {
           <p>
             Designed for clarity on desktop and mobile: collapsible sidebar, swipe gestures, dark mode,
             and document workflows that match SA tax practice (VAT 15%, ZAR, bank EFT details).
+            Q4 adds email 2FA, POPIA data export, SQLite backups, installable PWA, Docker, and EN/AF/ZU UI language.
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
             <Link className="btn-primary !text-xs" to="/documents">Open doc generator</Link>
