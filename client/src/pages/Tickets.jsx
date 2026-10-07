@@ -53,7 +53,24 @@ export default function Tickets() {
   const [liveTimer, setLiveTimer] = useState(0)
   const [busy, setBusy] = useState(false)
   const [partDraft, setPartDraft] = useState({ name: '', qty: 1, cost: 0 })
+  const [selectedIds, setSelectedIds] = useState([])
   const tickRef = useRef(null)
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+  const bulkStatus = async (status) => {
+    if (!selectedIds.length) return notify('Select tickets first', 'error')
+    try {
+      const r = await api('/api/v1/tickets/bulk-status', { method: 'POST', body: { ids: selectedIds, status } })
+      notify(`Updated ${r.data.updated} ticket(s) → ${status.replace('_', ' ')}`)
+      setSelectedIds([])
+      loadList()
+      loadMetrics()
+    } catch (e) {
+      notify(e.message, 'error')
+    }
+  }
 
   const loadList = () => {
     const params = new URLSearchParams()
@@ -234,6 +251,17 @@ export default function Tickets() {
         <select className="input max-w-[140px]" value={filter.assignee_id || ''} onChange={(e) => setFilter({ ...filter, assignee_id: e.target.value })}><option value="">All techs</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
         <select className="input max-w-[110px]" value={filter.warranty || ''} onChange={(e) => setFilter({ ...filter, warranty: e.target.value })}><option value="">Warranty</option><option value="1">Warranty only</option></select>
         <button type="button" className="btn-outline" onClick={loadList}>Refresh</button>
+        {selectedIds.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-xs text-slate-500">{selectedIds.length} selected</span>
+            {STATUSES.map((s) => (
+              <button key={s} type="button" className="btn-outline !text-[10px] !py-0.5" onClick={() => bulkStatus(s)}>
+                → {s.replace('_', ' ')}
+              </button>
+            ))}
+            <button type="button" className="btn-ghost !text-[10px]" onClick={() => setSelectedIds([])}>Clear</button>
+          </div>
+        )}
       </div>
 
       {view === 'kanban' ? (
@@ -282,11 +310,22 @@ export default function Tickets() {
           <div className="card overflow-hidden"><div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur text-left text-[10px] uppercase text-slate-500"><tr>
+                <th className="px-2 py-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={list.length > 0 && selectedIds.length === list.length}
+                    onChange={(e) => setSelectedIds(e.target.checked ? list.map((t) => t.id) : [])}
+                    aria-label="Select all"
+                  />
+                </th>
                 <th className="px-3 py-2">Job</th><th className="px-2 py-2">Client</th><th className="px-2 py-2">Tech</th><th className="px-2 py-2">Status</th><th className="px-2 py-2">SLA</th><th className="px-2 py-2">Time</th>
               </tr></thead>
               <tbody>
                 {list.map((t) => { const sla = slaLabel(t.sla_due_at); return (
                   <tr key={t.id} onClick={() => openTicket(t.id)} className={`cursor-pointer border-t border-slate-100 dark:border-slate-800 hover:bg-accent/5 ${selected === t.id ? 'bg-accent/10' : ''}`}>
+                    <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={selectedIds.includes(t.id)} onChange={() => toggleSelect(t.id)} aria-label={`Select ${t.title}`} />
+                    </td>
                     <td className="px-3 py-2.5"><div className="font-semibold">{t.title}{t.warranty ? ' 🛡' : ''}</div><div className="text-[10px] text-slate-500">{t.category}{t.timer_started_at && <span className="ml-1 text-accent animate-pulse">● live</span>}</div></td>
                     <td className="px-2 py-2 text-xs">{t.client_name || '—'}</td>
                     <td className="px-2 py-2 text-xs">{t.assignee_name || '—'}</td>
@@ -295,7 +334,7 @@ export default function Tickets() {
                     <td className="px-2 py-2 text-xs tabular-nums">{fmtTime(t.time_spent_seconds)}</td>
                   </tr>
                 )})}
-                {!list.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-500">No tickets</td></tr>}
+                {!list.length && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500">No tickets</td></tr>}
               </tbody>
             </table>
           </div></div>

@@ -29,6 +29,14 @@ export default function Settings() {
   const [tplCount, setTplCount] = useState(0)
   const [saving, setSaving] = useState(false)
   const [sec, setSec] = useState({ current: '', next: '', otp: '', busy: false })
+  const [tab, setTab] = useState('company')
+  const TABS = [
+    { id: 'company', label: 'Company' },
+    { id: 'invoice', label: 'Invoice' },
+    { id: 'tickets', label: 'Tickets' },
+    { id: 'appearance', label: 'Appearance' },
+    { id: 'security', label: 'Security' },
+  ]
 
   useEffect(() => {
     api('/api/v1/settings')
@@ -84,11 +92,28 @@ export default function Settings() {
     <div className="space-y-4">
       <PageHeader
         title={t('settings')}
-        subtitle="Company · invoice · tickets · security · appearance"
+        subtitle="Company · invoice · tickets · security · appearance · tabs"
         meta={[`${tplCount} templates`, prefs.style, `R${settings.hourly_rate || 450}/hr`]}
       />
 
-      <div className="card p-4 space-y-4">
+      <div className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-700 pb-2">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+              tab === t.id
+                ? 'bg-accent/15 text-accent'
+                : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'appearance' && <div className="card p-4 space-y-4">
         <h2 className="font-bold text-sm">Appearance (glass theme)</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div>
@@ -129,6 +154,7 @@ export default function Settings() {
       </div>
 
       <form className="space-y-4" onSubmit={save}>
+        {tab === 'invoice' && (
         <div className="card p-4 space-y-3">
           <h2 className="font-bold text-sm">Invoice preferences</h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -157,7 +183,9 @@ export default function Settings() {
             </div>
           </div>
         </div>
+        )}
 
+        {tab === 'tickets' && (
         <div className="card p-4 space-y-3">
           <h2 className="font-bold text-sm">Ticket defaults</h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -182,7 +210,9 @@ export default function Settings() {
             </div>
           </div>
         </div>
+        )}
 
+        {tab === 'company' && (
         <div className="card p-4 space-y-3">
           <h2 className="font-bold text-sm">Company profile</h2>
           <div className="flex flex-wrap items-center gap-3">
@@ -219,15 +249,19 @@ export default function Settings() {
             </div>
           </div>
         </div>
+        )}
 
-        {isAdmin && (
+        {isAdmin && (tab === 'company' || tab === 'invoice' || tab === 'tickets') && (
           <button className="btn-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save all settings'}</button>
         )}
-        {!isAdmin && <p className="text-xs text-amber-600">Sign in as admin to edit company & rates.</p>}
+        {!isAdmin && (tab === 'company' || tab === 'invoice' || tab === 'tickets') && (
+          <p className="text-xs text-amber-600">Sign in as admin to edit company & rates.</p>
+        )}
       </form>
 
+      {tab === 'security' && (
       <div className="card p-4 space-y-3">
-        <h2 className="font-bold text-sm">Security & privacy (Q4)</h2>
+        <h2 className="font-bold text-sm">Security & privacy</h2>
         <p className="text-xs text-slate-500">2FA · password · POPIA export · database backup · language</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
@@ -298,6 +332,7 @@ export default function Settings() {
           )}
         </div>
       </div>
+      )}
     </div>
   )
 }

@@ -47,6 +47,18 @@ export default function DocumentActionBar({
 
   const downloadPdf = () =>
     run('pdf', async () => {
+      if (type === 'ticket') {
+        const res = await api(`/api/v1/tickets/${id}/print`, { raw: true })
+        if (!res.ok) throw new Error('Print failed')
+        const html = await res.text()
+        const w = window.open('', '_blank')
+        if (w) {
+          w.document.write(html)
+          w.document.close()
+        }
+        notify('Job card opened', 'success')
+        return
+      }
       const res = await api(`/api/v1/invoices/${id}/pdf`, { raw: true })
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
@@ -130,6 +142,8 @@ export default function DocumentActionBar({
   }
 
   const isNew = !id || id === 'new'
+  const isTicket = type === 'ticket'
+  const isDoc = type === 'invoice' || type === 'quote' || type === 'credit'
   const Btn = ({ k, onClick, children, title, danger }) => (
     <button
       type="button"
@@ -153,28 +167,34 @@ export default function DocumentActionBar({
       <span className="mr-2 hidden text-xs font-semibold uppercase tracking-wide text-slate-400 sm:inline">
         Actions
       </span>
-      <Btn k="pdf" onClick={downloadPdf} title="Download PDF (P)">
-        📄 PDF
+      <Btn k="pdf" onClick={downloadPdf} title={isTicket ? 'Print job card' : 'Download PDF (P)'}>
+        {isTicket ? '🖨 Print' : '📄 PDF'}
       </Btn>
       <Btn k="wa" onClick={whatsapp} title="Share via WhatsApp (W)">
         💬 WhatsApp
       </Btn>
-      <Btn k="dup" onClick={duplicate} title="Duplicate (D)">
-        ⧉ Duplicate
-      </Btn>
+      {isDoc && (
+        <Btn k="dup" onClick={duplicate} title="Duplicate (D)">
+          ⧉ Duplicate
+        </Btn>
+      )}
+      {isDoc && (
+        <>
+          <span className="mx-1 h-4 w-px bg-slate-200 dark:bg-slate-600" />
+          <Btn k="copy" onClick={copyLines} title="Copy lines (Ctrl+C)">
+            ⎘ Copy
+          </Btn>
+          <Btn k="cut" onClick={cutLines} title="Cut selected lines">
+            ✂ Cut
+          </Btn>
+          <Btn k="paste" onClick={pasteLines} title="Paste lines (Ctrl+V)">
+            📋 Paste
+          </Btn>
+        </>
+      )}
       <span className="mx-1 h-4 w-px bg-slate-200 dark:bg-slate-600" />
-      <Btn k="copy" onClick={copyLines} title="Copy lines (Ctrl+C)">
-        ⎘ Copy
-      </Btn>
-      <Btn k="cut" onClick={cutLines} title="Cut selected lines">
-        ✂ Cut
-      </Btn>
-      <Btn k="paste" onClick={pasteLines} title="Paste lines (Ctrl+V)">
-        📋 Paste
-      </Btn>
-      <span className="mx-1 h-4 w-px bg-slate-200 dark:bg-slate-600" />
-      <Btn k="num" onClick={copyNumber} title="Copy document number">
-        # Copy no.
+      <Btn k="num" onClick={copyNumber} title="Copy document number / title">
+        # Copy
       </Btn>
       <Btn k="arch" onClick={archive} title="Archive" danger>
         🗄 Archive
