@@ -1,0 +1,11 @@
+{
+  "name": "said",
+  "version": "1.4.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "cd server && node src/index.js"
+  }
+}
