@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
+import PageHeader from '../components/PageHeader'
 
 const DEFAULT_VARS = {
   client_name: '',
@@ -43,6 +44,7 @@ export default function Documents() {
   const [templateId, setTemplateId] = useState('')
   const [vars, setVars] = useState(DEFAULT_VARS)
   const [total, setTotal] = useState(0)
+  const [generating, setGenerating] = useState(false)
 
   const load = () => {
     const params = new URLSearchParams()
@@ -52,10 +54,10 @@ export default function Documents() {
     const qs = params.toString() ? `?${params}` : ''
     api(`/api/v1/documents/templates${qs}`)
       .then((r) => {
-        setTemplates(r.data)
+        setTemplates(r.data || [])
         setCategories(r.categories || [])
-        setTotal(r.total || r.data.length)
-        if (r.data.length && !r.data.find((t) => t.id === templateId)) {
+        setTotal(r.total || (r.data || []).length)
+        if (r.data?.length && !r.data.find((t) => t.id === templateId)) {
           setTemplateId(r.data[0].id)
         }
       })
@@ -81,27 +83,56 @@ export default function Documents() {
     }).catch(() => {})
   }, [])
 
-  const download = async () => {
+  const download = async (format = 'pdf') => {
     if (!templateId) return notify('Select a template', 'error')
+    setGenerating(true)
     try {
       const res = await api('/api/v1/documents/render', {
         method: 'POST',
-        body: { template_id: templateId, variables: vars, format: 'pdf' },
+        body: { template_id: templateId, variables: vars, format },
         raw: true,
       })
       if (!res.ok) {
         const j = await res.json().catch(() => ({}))
-        throw new Error(j.message || 'Render failed')
+        throw new Error(j.message || j.error || `Render failed (${res.status})`)
+      }
+      if (format === 'html') {
+        const j = await res.json()
+        const html = j.data?.html || ''
+        const blob = new Blob([html], { type: 'text/html' })
+        window.open(URL.createObjectURL(blob), '_blank')
+        notify('HTML preview opened')
+        return
       }
       const blob = await res.blob()
+      if (!blob.size) throw new Error('Empty PDF — install Chromium on the server')
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
       a.download = `${templateId}.pdf`
+      document.body.appendChild(a)
       a.click()
+      a.remove()
       notify('PDF downloaded')
     } catch (e) {
-      notify(e.message, 'error')
+      notify(e.message || 'Generate failed', 'error')
+      if (format === 'pdf') {
+        try {
+          const res = await api('/api/v1/documents/render', {
+            method: 'POST',
+            body: { template_id: templateId, variables: vars, format: 'html' },
+            raw: true,
+          })
+          if (res.ok) {
+            const j = await res.json()
+            const html = j.data?.html || ''
+            window.open(URL.createObjectURL(new Blob([html], { type: 'text/html' })), '_blank')
+            notify('PDF engine unavailable — opened HTML instead')
+          }
+        } catch { /* ignore */ }
+      }
+    } finally {
+      setGenerating(false)
     }
   }
 
@@ -109,15 +140,14 @@ export default function Documents() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-extrabold">Documents</h1>
-          <p className="text-sm text-slate-500">{total}+ templates · filter by business · PDF via Puppeteer</p>
-        </div>
-        <Link className="btn-primary" to="/documents/designer">Template designer</Link>
-      </div>
+      <PageHeader
+        title="Document generator"
+        subtitle={`${total}+ templates · filter by business · PDF or HTML`}
+        meta={['Business filters', 'Custom templates', 'PDF / HTML export']}
+        actions={<Link className="btn-primary" to="/documents/designer">Template designer</Link>}
+      />
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap gap-2">
         <input className="input max-w-xs" placeholder="Search templates…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} />
         <select className="input max-w-[180px]" value={category} onChange={(e) => setCategory(e.target.value)}>
           <option value="">All categories</option>
@@ -149,7 +179,7 @@ export default function Documents() {
               <div className="text-[10px] text-slate-500">{t.category}</div>
             </button>
           ))}
-          {!templates.length && <p className="p-3 text-sm text-slate-500">No templates match.</p>}
+          {!templates.length && <p className="p-3 text-sm text-slate-500">No templates match. Restart server to seed templates.</p>}
         </div>
 
         <div className="card space-y-3 p-4">
@@ -172,7 +202,12 @@ export default function Documents() {
                 ))}
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn-primary" onClick={download}>Download PDF</button>
+                <button type="button" className="btn-primary" disabled={generating} onClick={() => download('pdf')}>
+                  {generating ? 'Generating…' : 'Download PDF'}
+                </button>
+                <button type="button" className="btn-outline" disabled={generating} onClick={() => download('html')}>
+                  Preview HTML
+                </button>
                 <Link className="btn-outline" to={`/documents/designer/${selected.id}`}>Edit template</Link>
               </div>
             </>
