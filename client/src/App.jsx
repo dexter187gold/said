@@ -12,6 +12,7 @@ import Quotes from './pages/Quotes'
 import Credits from './pages/Credits'
 import Tickets from './pages/Tickets'
 import Clients from './pages/Clients'
+import Ageing from './pages/Ageing'
 import Documents from './pages/Documents'
 import Settings from './pages/Settings'
 import TemplateDesigner from './pages/TemplateDesigner'
@@ -65,6 +66,7 @@ export default function App() {
                 <Route path="/credits/:id" element={<InvoiceEdit />} />
                 <Route path="/tickets" element={<Tickets />} />
                 <Route path="/clients" element={<Clients />} />
+                <Route path="/ageing" element={<Ageing />} />
                 <Route path="/documents" element={<Documents />} />
                 <Route path="/documents/designer" element={<TemplateDesigner />} />
                 <Route path="/documents/designer/:id" element={<TemplateDesigner />} />
