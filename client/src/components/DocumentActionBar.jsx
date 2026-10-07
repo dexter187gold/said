@@ -48,18 +48,33 @@ export default function DocumentActionBar({
   const downloadPdf = () =>
     run('pdf', async () => {
       if (type === 'ticket') {
+        try {
+          const res = await api(`/api/v1/tickets/${id}/pdf`, { raw: true })
+          if (res.ok) {
+            const blob = await res.blob()
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `jobcard-${id.slice(0, 8)}.pdf`
+            a.click()
+            window.open(url, '_blank', 'noopener')
+            notify('Job card PDF ready', 'success')
+            return
+          }
+        } catch (_) { /* HTML print fallback */ }
         const res = await api(`/api/v1/tickets/${id}/print`, { raw: true })
         if (!res.ok) throw new Error('Print failed')
         const html = await res.text()
         const w = window.open('', '_blank')
-        if (w) {
-          w.document.write(html)
-          w.document.close()
-        }
-        notify('Job card opened', 'success')
+        if (w) { w.document.open(); w.document.write(html); w.document.close() }
+        notify('Job card opened for print', 'success')
         return
       }
       const res = await api(`/api/v1/invoices/${id}/pdf`, { raw: true })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.message || 'PDF failed')
+      }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -72,6 +87,12 @@ export default function DocumentActionBar({
 
   const whatsapp = () =>
     run('wa', async () => {
+      if (type === 'ticket') {
+        const r = await api(`/api/v1/tickets/${id}/whatsapp-jobcard`, { method: 'POST' })
+        window.open(r.data.url, '_blank', 'noopener')
+        notify('WhatsApp job card opened', 'success')
+        return
+      }
       const r = await api(`/api/v1/doc-actions/${type}/${id}/whatsapp-link`, { method: 'POST' })
       window.open(r.data.url, '_blank', 'noopener')
       notify('WhatsApp opened', 'success')

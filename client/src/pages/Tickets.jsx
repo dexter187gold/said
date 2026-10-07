@@ -201,17 +201,66 @@ export default function Tickets() {
       if (!res.ok) throw new Error('Print failed')
       const html = await res.text()
       const w = window.open('', '_blank')
-      if (w) { w.document.write(html); w.document.close() }
-    } catch (e) { notify(e.message, 'error') }
+      if (w) {
+        w.document.open()
+        w.document.write(html)
+        w.document.close()
+      } else {
+        notify('Allow pop-ups to print the job card', 'error')
+      }
+    } catch (e) {
+      notify(e.message, 'error')
+    }
+  }
+  const pdfJob = async () => {
+    if (!selected) return
+    try {
+      const res = await api(`/api/v1/tickets/${selected}/pdf`, { raw: true })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.message || 'PDF failed')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `jobcard-${selected.slice(0, 8)}.pdf`
+      a.click()
+      window.open(url, '_blank', 'noopener')
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+      notify('Job card PDF ready', 'success')
+    } catch (e) {
+      notify(e.message || 'PDF generation failed — try Print instead', 'error')
+    }
   }
   const whatsappStatus = async () => {
     if (!detail) return
     try {
-      const r = await api(`/api/v1/doc-actions/ticket/${detail.id}/whatsapp-link`, { method: 'POST' })
+      const r = await api(`/api/v1/tickets/${detail.id}/whatsapp-jobcard`, { method: 'POST' })
       window.open(r.data.url, '_blank', 'noopener')
-    } catch {
-      const text = `SAID Job Update\n${detail.title}\nStatus: ${detail.status}\nTime: ${fmtTime(displaySeconds)}\n${detail.client_name || ''}`
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
+      notify('WhatsApp job card opened', 'success')
+    } catch (e) {
+      try {
+        const r = await api(`/api/v1/doc-actions/ticket/${detail.id}/whatsapp-link`, { method: 'POST' })
+        window.open(r.data.url, '_blank', 'noopener')
+      } catch {
+        notify(e.message || 'WhatsApp failed', 'error')
+      }
+    }
+  }
+  const notifyStatusWhatsApp = async (status) => {
+    if (!selected) return
+    try {
+      const r = await api(`/api/v1/tickets/${selected}/status`, {
+        method: 'PATCH',
+        body: { status, notify_whatsapp: true },
+      })
+      if (r.whatsapp?.url) window.open(r.whatsapp.url, '_blank', 'noopener')
+      openTicket(selected)
+      loadList()
+      notify(`Status → ${status.replace('_', ' ')} · WhatsApp ready`)
+    } catch (e) {
+      notify(e.message, 'error')
     }
   }
   const addPartToJob = () => {
@@ -364,9 +413,23 @@ export default function Tickets() {
                     <button type="button" className="btn-outline !text-xs" onClick={addManual}>Log</button>
                   </div>
                   <button type="button" className="btn-primary w-full !text-xs" disabled={busy} onClick={billInvoice}>Bill → invoice</button>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button type="button" className="btn-outline flex-1 !text-xs" onClick={printJob}>Print job card</button>
-                    <button type="button" className="btn-share flex-1 bg-[#25D366] !text-xs" onClick={whatsappStatus}>WhatsApp</button>
+                    <button type="button" className="btn-outline flex-1 !text-xs" onClick={pdfJob}>PDF job card</button>
+                    <button type="button" className="btn-share flex-1 bg-[#25D366] !text-xs text-white" onClick={whatsappStatus}>WhatsApp job card</button>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="text-[10px] text-slate-500 w-full">Update status + notify client:</span>
+                    {['in_progress', 'waiting', 'resolved', 'closed'].map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className="btn-outline !text-[10px] !py-0.5"
+                        onClick={() => notifyStatusWhatsApp(s)}
+                      >
+                        {s.replace('_', ' ')} + WA
+                      </button>
+                    ))}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">

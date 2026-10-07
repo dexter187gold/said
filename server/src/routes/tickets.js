@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { db, uid, now } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { mountTicketTimers } from './ticketTimers.js'
+import { htmlToPdf } from '../services/pdf.js'
+import { buildJobCardHtml, buildJobCardWhatsApp, saPhoneToWa } from '../services/jobCard.js'
 
 export const ticketsRouter = Router()
 ticketsRouter.use(requireAuth)
@@ -103,34 +105,77 @@ ticketsRouter.get('/metrics', (_req, res) => {
   })
 })
 
-ticketsRouter.get('/:id/print', (req, res) => {
-  const t = db.prepare(`SELECT t.*, c.name AS client_name, c.phone AS client_phone, c.address AS client_address,
-    u.name AS assignee_name, co.name AS company_name, co.phone AS company_phone, co.address AS company_address
+function loadJobTicket(id) {
+  return db
+    .prepare(
+      `SELECT t.*, c.name AS client_name, c.phone AS client_phone, c.address AS client_address, c.email AS client_email,
+    u.name AS assignee_name, co.name AS company_name, co.phone AS company_phone, co.address AS company_address,
+    co.email AS company_email, co.logo_url
     FROM tickets t LEFT JOIN clients c ON c.id = t.client_id LEFT JOIN users u ON u.id = t.assignee_id
-    LEFT JOIN company co ON co.id = 'main' WHERE t.id = ?`).get(req.params.id)
+    LEFT JOIN company co ON co.id = 'main' WHERE t.id = ?`
+    )
+    .get(id)
+}
+
+ticketsRouter.get('/:id/print', (req, res) => {
+  const t = loadJobTicket(req.params.id)
   if (!t) return res.status(404).json({ error: true, message: 'Not found' })
   const parts = parseParts(t)
-  const partsRows = parts.map((p) => `<tr><td>${p.name}</td><td>${p.qty}</td><td>R ${Number(p.cost || 0).toFixed(2)}</td><td>R ${(Number(p.qty) * Number(p.cost || 0)).toFixed(2)}</td></tr>`).join('')
-  const hours = Math.round(((t.time_spent_seconds || 0) / 3600) * 100) / 100
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Job Card</title>
-<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:24px auto;padding:16px;font-size:13px}
-h1{font-size:20px;margin:0}.muted{color:#64748b}.box{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:10px 0}
-table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e2e8f0;padding:6px;text-align:left}
-.brand{color:#007A4D;font-weight:800;font-size:11px;letter-spacing:.08em}.sig{margin-top:40px;display:flex;gap:40px}.sig div{flex:1;border-top:1px solid #94a3b8;padding-top:6px}
-@media print{button{display:none}}</style></head><body>
-<div class="brand">SA INVOICE DESK · JOB CARD</div>
-<h1>${t.title}</h1>
-<p class="muted">#${t.id.slice(0, 8)} · ${t.status} · ${t.priority}${t.warranty ? ' · WARRANTY' : ''}</p>
-<div class="box"><strong>${t.company_name || 'Company'}</strong><br>${t.company_address || ''}<br>${t.company_phone || ''}</div>
-<div class="box"><strong>Client:</strong> ${t.client_name || '—'}<br>${t.client_phone || ''}<br>
-<strong>Assignee:</strong> ${t.assignee_name || 'Unassigned'} · <strong>Category:</strong> ${t.category || '—'}
-${t.sla_due_at ? `<br><strong>SLA due:</strong> ${String(t.sla_due_at).slice(0, 16).replace('T', ' ')}` : ''}</div>
-<div class="box"><strong>Description</strong><pre style="white-space:pre-wrap;font-family:inherit">${t.description || '—'}</pre></div>
-${parts.length ? `<div class="box"><strong>Parts</strong><table><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead><tbody>${partsRows}</tbody></table></div>` : ''}
-<div class="box"><strong>Time:</strong> ${hours} h</div>
-<div class="sig"><div>Technician signature</div><div>Customer signature</div></div>
-<button onclick="window.print()">Print</button></body></html>`
-  res.type('html').send(html)
+  const company = {
+    name: t.company_name,
+    phone: t.company_phone,
+    address: t.company_address,
+    email: t.company_email,
+    logo_url: t.logo_url,
+  }
+  res.type('html').send(buildJobCardHtml(t, parts, { company }))
+})
+
+ticketsRouter.get('/:id/pdf', async (req, res, next) => {
+  try {
+    const t = loadJobTicket(req.params.id)
+    if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+    const parts = parseParts(t)
+    const company = {
+      name: t.company_name,
+      phone: t.company_phone,
+      address: t.company_address,
+      email: t.company_email,
+      logo_url: t.logo_url,
+    }
+    const html = buildJobCardHtml(t, parts, { company })
+    const pdf = await htmlToPdf(html)
+    const ref = (t.id || '').slice(0, 8)
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="jobcard-${ref}.pdf"`)
+    res.send(pdf)
+  } catch (e) {
+    next(e)
+  }
+})
+
+ticketsRouter.post('/:id/whatsapp-jobcard', (req, res) => {
+  const t = loadJobTicket(req.params.id)
+  if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+  const parts = parseParts(t)
+  const company = {
+    name: t.company_name,
+    phone: t.company_phone,
+    address: t.company_address,
+    email: t.company_email,
+  }
+  const text = buildJobCardWhatsApp(t, parts, { company })
+  const phone = saPhoneToWa(t.client_phone)
+  const url = phone
+    ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+    : `https://wa.me/?text=${encodeURIComponent(text)}`
+  try {
+    db.prepare(
+      `INSERT INTO document_activity (id, document_type, document_id, user_id, action, detail, created_at)
+       VALUES (?,?,?,?,?,?,?)`
+    ).run(uid(), 'ticket', t.id, req.user?.sub || null, 'whatsapp_jobcard', t.status, now())
+  } catch {}
+  res.json({ data: { url, phone: phone || null, text, preview: text.slice(0, 280) } })
 })
 
 ticketsRouter.get('/:id', (req, res) => {
@@ -232,6 +277,7 @@ ticketsRouter.post('/:id/clone', requireRole('staff'), (req, res, next) => {
 ticketsRouter.patch('/:id/status', requireRole('staff'), (req, res, next) => {
   try {
     const status = z.enum(['open', 'in_progress', 'waiting', 'resolved', 'closed', 'archived']).parse(req.body?.status)
+    const notifyWa = !!req.body?.notify_whatsapp
     const existing = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id)
     if (!existing) return res.status(404).json({ error: true, message: 'Not found' })
     let resolved_at = existing.resolved_at
@@ -249,7 +295,22 @@ ticketsRouter.patch('/:id/status', requireRole('staff'), (req, res, next) => {
          VALUES (?,?,?,?,?,?,?)`
       ).run(uid(), 'ticket', req.params.id, req.user.sub, 'status_change', status, now())
     } catch {}
-    res.json({ data: enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id)) })
+    const data = enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id))
+    let whatsapp = null
+    if (notifyWa || req.body?.include_whatsapp) {
+      const t = loadJobTicket(req.params.id)
+      if (t) {
+        const parts = parseParts(t)
+        const company = { name: t.company_name, phone: t.company_phone, address: t.company_address, email: t.company_email }
+        const text = buildJobCardWhatsApp(t, parts, { company })
+        const phone = saPhoneToWa(t.client_phone)
+        whatsapp = {
+          url: phone ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`,
+          phone: phone || null,
+        }
+      }
+    }
+    res.json({ data, whatsapp })
   } catch (e) {
     next(e)
   }
