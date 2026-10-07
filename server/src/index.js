@@ -14,8 +14,11 @@ import { settingsRouter } from './routes/settings.js'
 import { pagePrefsRouter } from './routes/pagePrefs.js'
 import { documentActionsRouter } from './routes/documentActions.js'
 import { insightRouter } from './routes/insight.js'
+import { platformRouter } from './routes/platform.js'
+import { portalRouter } from './routes/portal.js'
 import { errorHandler, notFound } from './middleware/error.js'
 import { requireAuth } from './middleware/auth.js'
+import { rateLimit } from './middleware/rateLimit.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 seedIfEmpty()
@@ -34,10 +37,28 @@ app.use((req, res, next) => {
   }
   next()
 })
+// EA-Q4: global soft rate limit
+app.use('/api/', rateLimit({ windowMs: 60_000, max: 300 }))
+app.use('/api/v1/auth/login', rateLimit({ windowMs: 60_000, max: 20, keyFn: (r) => `login:${r.ip}` }))
 
 app.get('/api/v1/health', (_req, res) => {
   const tplCount = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
-  res.json({ ok: true, service: 'said', version: '1.7.0-q3', templates: tplCount })
+  res.json({
+    ok: true,
+    service: 'said',
+    version: '1.8.0-q4',
+    templates: tplCount,
+    time: new Date().toISOString(),
+  })
+})
+
+app.get('/api/v1/ready', (_req, res) => {
+  try {
+    db.prepare('SELECT 1').get()
+    res.json({ ready: true })
+  } catch (e) {
+    res.status(503).json({ ready: false, error: e.message })
+  }
 })
 
 app.get('/api/v1/company', requireAuth, (_req, res) => {
@@ -61,6 +82,8 @@ app.use('/api/v1/settings', settingsRouter)
 app.use('/api/v1/page-prefs', pagePrefsRouter)
 app.use('/api/v1/doc-actions', documentActionsRouter)
 app.use('/api/v1/insight', insightRouter)
+app.use('/api/v1/platform', platformRouter)
+app.use('/api/v1/portal', portalRouter)
 
 const clientDist = path.join(__dirname, '../../client/dist')
 if (fs.existsSync(clientDist)) {

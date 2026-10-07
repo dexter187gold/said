@@ -16,6 +16,7 @@ const links = [
   { to: '/clients', label: 'Clients', icon: '◎' },
   { to: '/documents', label: 'Doc generator', icon: '▤' },
   { to: '/settings', label: 'Settings', icon: '⚙' },
+  { to: '/platform', label: 'Platform', icon: '⬡' },
   { to: '/about', label: 'About', icon: 'ⓘ' },
 ]
 
@@ -120,7 +121,7 @@ export default function Shell() {
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-bold tracking-tight">SAID</div>
-              <div className="text-[10px] text-slate-500">v1.5 · Q2</div>
+              <div className="text-[10px] text-slate-500">v1.8 · Q4</div>
             </div>
           )}
           <button type="button" className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:text-accent hover:bg-black/5" onClick={() => persist(!collapsed)}>{collapsed ? '›' : '‹'}</button>
@@ -155,7 +156,7 @@ export default function Shell() {
           </div>
         </main>
         <footer className="shrink-0 border-t border-white/10 px-4 py-2 text-[10px] text-slate-400 flex flex-wrap gap-x-3 gap-y-1 glass-panel rounded-none">
-          <span>SAID v1.6 Expert</span>
+          <span>SAID v1.8 Q4</span>
           <NavLink to="/about" className="hover:text-accent">About</NavLink>
           <NavLink to="/settings" className="hover:text-accent">Theme</NavLink>
         </footer>

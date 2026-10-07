@@ -17,6 +17,8 @@ import Documents from './pages/Documents'
 import Settings from './pages/Settings'
 import TemplateDesigner from './pages/TemplateDesigner'
 import About from './pages/About'
+import Platform from './pages/Platform'
+import Portal from './pages/Portal'
 
 function Guard({ children }) {
   const { user, ready, setupComplete } = useAuth()
@@ -48,6 +50,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/setup" element={<SetupGuard><Setup /></SetupGuard>} />
+      <Route path="/portal" element={<Portal />} />
       <Route
         path="/*"
         element={
@@ -71,6 +74,7 @@ export default function App() {
                 <Route path="/documents/designer" element={<TemplateDesigner />} />
                 <Route path="/documents/designer/:id" element={<TemplateDesigner />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/platform" element={<Platform />} />
                 <Route path="/about" element={<About />} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />

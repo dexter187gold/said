@@ -13,7 +13,11 @@ const FEATURES = [
   { t: 'Clients CRM', d: 'Central client records linked to invoices, tickets, and docs.' },
   { t: 'Settings', d: 'Company profile, VAT, bank details, business type defaults.' },
   { t: '2FA + POPIA', d: 'Email two-factor auth, POPIA data export, SQLite backups, PWA install.' },
+  { t: 'Platform admin', d: 'Feature flags, audit log, API keys, multi-branch stubs.' },
+  { t: 'Client portal', d: 'Token-based read-only invoices and ticket status for clients.' },
+  { t: 'Insight Q3', d: 'Smart suggestions, forecast, payment reminders, recurring invoices.' },
 ]
+
 
 export default function About() {
   return (
@@ -21,7 +25,7 @@ export default function About() {
       <PageHeader
         title="About SAID"
         subtitle="SA Invoice Desk — built for South African SMEs"
-        meta={['v1.5.0', 'Q4 · PWA · 2FA · Docker', 'POPIA export']}
+        meta={['v1.8.0', 'EA-Q4 · platform · portal · API keys', 'POPIA']}
       />
 
       <div className="card p-5 sm:p-6 flex flex-col sm:flex-row gap-4 items-start">
