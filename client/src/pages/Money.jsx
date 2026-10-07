@@ -30,6 +30,8 @@ export default function Money() {
   const [retainers, setRetainers] = useState([])
   const [retForm, setRetForm] = useState({ client_id: '', amount: '', interval_days: 30, description: 'Monthly retainer' })
   const [snapId, setSnapId] = useState('')
+  const [recon, setRecon] = useState(null)
+  const [itnLog, setItnLog] = useState([])
 
   const load = async () => {
     setLoading(true)
@@ -171,6 +173,7 @@ export default function Money() {
           { id: 'deposits', label: 'Deposits' },
           { id: 'retainers', label: 'Retainers' },
           { id: 'payfast', label: 'PayFast' },
+          { id: 'recon', label: 'Recon' },
         ].map((t) => (
           <button
             key={t.id}
@@ -262,6 +265,20 @@ export default function Money() {
                             }}
                           >
                             Email
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-outline !text-[10px] !py-0.5"
+                            onClick={async () => {
+                              try {
+                                const res = await api(`/api/v1/money/receipts/${r.id}`, { method: 'POST' })
+                                notify(res.data.delivered ? `Receipt → ${res.data.to}` : `Receipt stub → ${res.data.to}`)
+                              } catch (e) {
+                                notify(e.message, 'error')
+                              }
+                            }}
+                          >
+                            Receipt
                           </button>
                         </div>
                       </td>
@@ -669,6 +686,87 @@ export default function Money() {
               PayFast ITN URL for your merchant dashboard: <code className="text-[10px]">/api/v1/money/payfast/itn</code>
             </p>
           </div>
+        </div>
+      )}
+
+
+      {!loading && tab === 'recon' && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-primary !text-xs"
+              onClick={async () => {
+                try {
+                  const r = await api('/api/v1/money/reconciliation')
+                  setRecon(r.data)
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Load reconciliation
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                try {
+                  const r = await api('/api/v1/money/payfast/itn-log')
+                  setItnLog(r.data || [])
+                } catch (e) {
+                  notify(e.message || 'Admin required for ITN log', 'error')
+                }
+              }}
+            >
+              PayFast ITN log
+            </button>
+          </div>
+          {recon && (
+            <div className="card p-4 grid gap-2 sm:grid-cols-2 text-sm">
+              <div>Open invoices: <strong>{recon.open_invoices}</strong></div>
+              <div>Open balance: <strong>{fmt(recon.open_balance)}</strong></div>
+              <div>Payments this month: <strong>{recon.payments_this_month}</strong></div>
+              <div>Collected this month: <strong>{fmt(recon.collected_this_month)}</strong></div>
+              <div className="sm:col-span-2 text-xs text-slate-500">Month {recon.month} · PayFast ITNs: {recon.payfast_itn_this_month}</div>
+              {!!recon.by_method?.length && (
+                <ul className="sm:col-span-2 text-xs space-y-1">
+                  {recon.by_method.map((m) => (
+                    <li key={m.method}>{m.method}: {m.c} · {fmt(m.total)}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {!!itnLog.length && (
+            <div className="card overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="text-[10px] uppercase text-slate-500">
+                  <tr>
+                    <th className="px-2 py-1 text-left">When</th>
+                    <th className="px-2 py-1 text-left">Invoice</th>
+                    <th className="px-2 py-1 text-left">Status</th>
+                    <th className="px-2 py-1 text-right">Amount</th>
+                    <th className="px-2 py-1">OK</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itnLog.map((row) => (
+                    <tr key={row.id} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-2 py-1">{(row.created_at || '').slice(0, 19)}</td>
+                      <td className="px-2 py-1">{row.m_payment_id}</td>
+                      <td className="px-2 py-1">{row.payment_status}</td>
+                      <td className="px-2 py-1 text-right">{row.amount_gross}</td>
+                      <td className="px-2 py-1">{row.processed === 1 ? 'yes' : row.processed === -1 ? 'rej' : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-[10px] text-slate-500">
+            Cron retainers: POST /api/v1/cron/retainers with header X-SAID-Cron matching SAID_CRON_KEY env.
+          </p>
         </div>
       )}
 

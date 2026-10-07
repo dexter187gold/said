@@ -16,7 +16,7 @@ import { documentActionsRouter } from './routes/documentActions.js'
 import { insightRouter } from './routes/insight.js'
 import { platformRouter } from './routes/platform.js'
 import { portalRouter } from './routes/portal.js'
-import { moneyRouter, handlePayfastItn } from './routes/money.js'
+import { moneyRouter, handlePayfastItn, runDueRetainers } from './routes/money.js'
 import { errorHandler, notFound } from './middleware/error.js'
 import { requireAuth } from './middleware/auth.js'
 import { rateLimit } from './middleware/rateLimit.js'
@@ -48,7 +48,7 @@ app.get('/api/v1/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'said',
-    version: '1.9.2-hermes',
+    version: '1.9.3-hermes',
     templates: tplCount,
     time: new Date().toISOString(),
   })
@@ -87,6 +87,19 @@ app.use('/api/v1/insight', insightRouter)
 app.use('/api/v1/platform', platformRouter)
 app.use('/api/v1/portal', portalRouter)
 app.post('/api/v1/money/payfast/itn', handlePayfastItn)
+app.post('/api/v1/cron/retainers', (req, res) => {
+  const cronKey = process.env.SAID_CRON_KEY || ''
+  const provided = req.headers['x-said-cron'] || req.body?.cron_key || ''
+  if (!cronKey || provided !== cronKey) {
+    return res.status(401).json({ error: true, message: 'Invalid cron key' })
+  }
+  try {
+    const created = runDueRetainers('cron')
+    res.json({ data: { created, count: created.length } })
+  } catch (e) {
+    res.status(500).json({ error: true, message: e.message })
+  }
+})
 app.use('/api/v1/money', moneyRouter)
 
 const clientDist = path.join(__dirname, '../../client/dist')

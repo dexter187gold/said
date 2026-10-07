@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { db, uid, now, audit } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { sendAppEmail } from '../services/mail.js'
+import crypto from 'crypto'
 
 export const moneyRouter = Router()
 moneyRouter.use(requireAuth)
@@ -308,6 +309,35 @@ function setSetting(key, value) {
   ).run(key, String(value))
 }
 
+
+function payfastSignature(fields, passphrase = '') {
+  const keys = Object.keys(fields)
+    .filter((k) => fields[k] !== '' && fields[k] != null && k !== 'signature')
+    .sort()
+  const parts = keys.map((k) => `${k}=${encodeURIComponent(String(fields[k]).trim()).replace(/%20/g, '+')}`)
+  let str = parts.join('&')
+  if (passphrase) str += `&passphrase=${encodeURIComponent(passphrase.trim()).replace(/%20/g, '+')}`
+  return crypto.createHash('md5').update(str).digest('hex')
+}
+
+function verifyPayfastItn(body) {
+  const passphrase = getSetting('payfast_passphrase', '')
+  const merchantId = getSetting('payfast_merchant_id', '')
+  if (!merchantId) return { ok: true, soft: true }
+  if (merchantId && body.merchant_id && String(body.merchant_id) !== String(merchantId)) {
+    return { ok: false, reason: 'merchant_id mismatch' }
+  }
+  if (!body.signature) return { ok: true, soft: true, reason: 'no signature (accepted)' }
+  const check = { ...body }
+  delete check.signature
+  const expected = payfastSignature(check, passphrase)
+  if (String(body.signature).toLowerCase() !== expected.toLowerCase()) {
+    return { ok: false, reason: 'signature mismatch' }
+  }
+  return { ok: true }
+}
+
+
 /** PayFast merchant settings */
 moneyRouter.get('/payfast/config', requireRole('admin'), (_req, res) => {
   res.json({
@@ -386,6 +416,10 @@ moneyRouter.get('/payfast/link/:invoiceId', (req, res) => {
   }
 
   // Simple query-string link (signature skipped for sandbox demo; production should sign)
+  const passphrase = getSetting('payfast_passphrase', '')
+  const signature = payfastSignature(fields, passphrase)
+  fields.signature = signature
+
   const params = new URLSearchParams()
   for (const [k, v] of Object.entries(fields)) {
     if (v) params.set(k, v)
@@ -401,6 +435,7 @@ moneyRouter.get('/payfast/link/:invoiceId', (req, res) => {
       balance,
       invoice_number: inv.number,
       configured: !!(merchant_id && merchant_key),
+      signed: !!passphrase,
       note: merchant_id
         ? 'Open URL or POST fields to PayFast to collect payment'
         : 'Using PayFast sandbox demo merchant — set merchant_id/key in Money → PayFast',
@@ -841,6 +876,7 @@ moneyRouter.post('/retainers/run', requireRole('staff'), (req, res, next) => {
  * PayFast ITN (Instant Transaction Notification) — public handler
  * Validates payment_status COMPLETE and marks invoice paid by m_payment_id (invoice number)
  */
+
 export async function handlePayfastItn(req, res) {
   try {
     const body = req.body || {}
@@ -856,6 +892,13 @@ export async function handlePayfastItn(req, res) {
       body.amount_gross || null,
       now()
     )
+
+    const verified = verifyPayfastItn(body)
+    if (!verified.ok) {
+      console.warn('[PayFast ITN] rejected', verified.reason)
+      db.prepare(`UPDATE payfast_itn_log SET processed = -1 WHERE id = ?`).run(logId)
+      return res.status(200).send('OK')
+    }
 
     const status = String(body.payment_status || '').toUpperCase()
     const mPaymentId = body.m_payment_id
@@ -903,3 +946,257 @@ export async function handlePayfastItn(req, res) {
     res.status(200).send('OK') // always 200 so PayFast does not retry forever incorrectly
   }
 }
+
+
+/* ─── Hermes-Metal slice 4: receipts, recon, ITN log, auto-retainers ─── */
+
+/** Email payment receipt */
+moneyRouter.post('/receipts/:invoiceId', requireRole('staff'), async (req, res, next) => {
+  try {
+    const inv = db
+      .prepare(
+        `SELECT i.*, c.name AS client_name, c.email AS client_email
+         FROM invoices i LEFT JOIN clients c ON c.id = i.client_id WHERE i.id = ?`
+      )
+      .get(req.params.invoiceId)
+    if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
+    if (!inv.client_email) return res.status(400).json({ error: true, message: 'Client has no email' })
+    const co = db.prepare(`SELECT * FROM company WHERE id = 'main'`).get() || {}
+    const payments = db
+      .prepare(`SELECT * FROM payments WHERE invoice_id = ? ORDER BY date DESC`)
+      .all(inv.id)
+    const lines = payments
+      .map((p) => `  ${p.date}  ${moneyFmt(p.amount)}  ${p.method}${p.note ? `  (${p.note})` : ''}`)
+      .join('\n')
+    const text =
+      `Payment receipt — ${co.name || 'SAID'}\n` +
+      `━━━━━━━━━━━━━━━━\n` +
+      `Invoice: ${inv.number}\n` +
+      `Client: ${inv.client_name || ''}\n` +
+      `Invoice total: ${moneyFmt(inv.total)}\n` +
+      `Amount paid: ${moneyFmt(inv.amount_paid)}\n` +
+      `Balance: ${moneyFmt(Math.max(0, inv.total - inv.amount_paid))}\n` +
+      `Status: ${inv.status}\n\n` +
+      `Payments:\n${lines || '  (none listed)'}\n\n` +
+      `Thank you for your payment.\n${co.name || 'SAID'}\n${co.phone || ''}`
+    const mail = await sendAppEmail({
+      to: inv.client_email,
+      subject: `Receipt: ${inv.number} — ${co.name || 'SAID'}`,
+      text,
+    })
+    audit(req.user.sub, 'receipt.email', inv.number, req.ip)
+    res.json({ data: { delivered: mail.delivered, stub: !!mail.stub, to: inv.client_email } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Reconciliation snapshot: open invoices vs payments this month */
+moneyRouter.get('/reconciliation', requireRole('staff'), (_req, res) => {
+  const open = db
+    .prepare(
+      `SELECT COUNT(*) AS c, COALESCE(SUM(total - amount_paid),0) AS balance
+       FROM invoices
+       WHERE COALESCE(doc_type,'invoice')='invoice'
+         AND status NOT IN ('paid','cancelled')
+         AND (total - amount_paid) > 0.009`
+    )
+    .get()
+  const month = now().slice(0, 7)
+  const paidMonth = db
+    .prepare(
+      `SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS total
+       FROM payments WHERE date LIKE ?`
+    )
+    .get(`${month}%`)
+  const byMethod = db
+    .prepare(
+      `SELECT method, COUNT(*) AS c, COALESCE(SUM(amount),0) AS total
+       FROM payments WHERE date LIKE ? GROUP BY method ORDER BY total DESC`
+    )
+    .all(`${month}%`)
+  const itn = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM payfast_itn_log WHERE created_at LIKE ?`
+    )
+    .get(`${month}%`)
+  res.json({
+    data: {
+      as_of: now(),
+      month,
+      open_invoices: open.c,
+      open_balance: open.balance,
+      payments_this_month: paidMonth.c,
+      collected_this_month: paidMonth.total,
+      by_method: byMethod,
+      payfast_itn_this_month: itn.c,
+    },
+  })
+})
+
+/** Recent PayFast ITN log (admin) */
+moneyRouter.get('/payfast/itn-log', requireRole('admin'), (req, res) => {
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 30))
+  const rows = db
+    .prepare(
+      `SELECT id, m_payment_id, payment_status, amount_gross, processed, created_at
+       FROM payfast_itn_log ORDER BY created_at DESC LIMIT ?`
+    )
+    .all(limit)
+  res.json({ data: rows })
+})
+
+/**
+ * Auto-run due retainers (staff or internal cron key)
+ * Header: X-SAID-Cron: process.env.SAID_CRON_KEY or body key
+ */
+moneyRouter.post('/retainers/auto-run', async (req, res, next) => {
+  try {
+    const cronKey = process.env.SAID_CRON_KEY || ''
+    const provided = req.headers['x-said-cron'] || req.body?.cron_key || ''
+    const isCron = cronKey && provided && provided === cronKey
+    if (!isCron) {
+      // fall through to normal staff auth already applied by router
+      if (!req.user) {
+        return res.status(401).json({ error: true, message: 'Unauthorized' })
+      }
+    }
+    // Delegate: same logic as /retainers/run — call by reusing query
+    const today = now().slice(0, 10)
+    const due = db.prepare(`SELECT * FROM retainer_schedules WHERE active = 1 AND next_run <= ?`).all(today)
+    const created = []
+    const userId = req.user?.sub || 'cron'
+    for (const r of due) {
+      const invId = uid()
+      const y = new Date().getFullYear()
+      const c = db.prepare(`SELECT COUNT(*) AS c FROM invoices WHERE number LIKE ?`).get(`INV-${y}-%`).c
+      const number = `INV-${y}-${String(c + 1).padStart(4, '0')}`
+      const exclusive = Number(r.amount)
+      const vat = Math.round(exclusive * 0.15 * 100) / 100
+      const total = Math.round((exclusive + vat) * 100) / 100
+      const dueDate = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10)
+      db.prepare(
+        `INSERT INTO invoices (
+          id, number, client_id, date, due_date, status, notes, exclusive, vat_amount, total, amount_paid,
+          created_by, created_at, updated_at, doc_type, payment_note
+        ) VALUES (?,?,?,?,?,'unpaid',?,?,?,?,0,?,?,?,'invoice',?)`
+      ).run(
+        invId, number, r.client_id, today, dueDate,
+        `Auto retainer · schedule ${r.id.slice(0, 8)}`,
+        exclusive, vat, total, userId, now(), now(),
+        'Retainer payment due.'
+      )
+      db.prepare(
+        `INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,0)`
+      ).run(uid(), invId, r.description || 'Retainer', 1, exclusive)
+      const next = new Date(r.next_run)
+      next.setDate(next.getDate() + Number(r.interval_days || 30))
+      db.prepare(`UPDATE retainer_schedules SET next_run=?, last_invoice_id=? WHERE id=?`).run(
+        next.toISOString().slice(0, 10), invId, r.id
+      )
+      created.push({ schedule_id: r.id, invoice_id: invId, number })
+    }
+    res.json({ data: { created, count: created.length, via: isCron ? 'cron' : 'user' } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** After recording payment, optional auto-receipt if ?receipt=1 */
+moneyRouter.post('/invoices/:id/pay-and-receipt', requireRole('staff'), async (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        amount: z.coerce.number().positive(),
+        method: z.string().default('EFT'),
+        date: z.string().optional(),
+        note: z.string().optional().nullable(),
+        send_receipt: z.boolean().optional().default(true),
+      })
+      .parse(req.body)
+    const inv = db.prepare(`SELECT * FROM invoices WHERE id = ?`).get(req.params.id)
+    if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
+    db.prepare(
+      `INSERT INTO payments (id, invoice_id, amount, method, date, note, created_at) VALUES (?,?,?,?,?,?,?)`
+    ).run(
+      uid(), req.params.id, body.amount, body.method || 'EFT',
+      body.date || now().slice(0, 10), body.note || null, now()
+    )
+    const paid = db.prepare(`SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE invoice_id = ?`).get(req.params.id).s
+    let status = 'unpaid'
+    if (paid >= inv.total - 0.009) status = 'paid'
+    else if (paid > 0) status = 'partial'
+    db.prepare(`UPDATE invoices SET amount_paid=?, status=?, updated_at=? WHERE id=?`).run(paid, status, now(), req.params.id)
+
+    let receipt = null
+    if (body.send_receipt) {
+      const full = db
+        .prepare(
+          `SELECT i.*, c.name AS client_name, c.email AS client_email
+           FROM invoices i LEFT JOIN clients c ON c.id = i.client_id WHERE i.id = ?`
+        )
+        .get(req.params.id)
+      if (full?.client_email) {
+        const co = db.prepare(`SELECT name FROM company WHERE id = 'main'`).get() || {}
+        receipt = await sendAppEmail({
+          to: full.client_email,
+          subject: `Receipt: ${full.number} — ${moneyFmt(body.amount)} received`,
+          text:
+            `Hi ${full.client_name || 'there'},\n\n` +
+            `We received ${moneyFmt(body.amount)} toward invoice ${full.number}.\n` +
+            `Total paid: ${moneyFmt(paid)} · Balance: ${moneyFmt(Math.max(0, full.total - paid))}\n\n` +
+            `Thank you,\n${co.name || 'SAID'}`,
+        })
+      }
+    }
+    res.status(201).json({
+      data: {
+        amount_paid: paid,
+        status,
+        balance: Math.max(0, inv.total - paid),
+        receipt,
+      },
+    })
+  } catch (e) {
+    next(e)
+  }
+})
+
+
+export function runDueRetainers(userId = 'cron') {
+  const today = now().slice(0, 10)
+  const due = db.prepare(`SELECT * FROM retainer_schedules WHERE active = 1 AND next_run <= ?`).all(today)
+  const created = []
+  for (const r of due) {
+    const invId = uid()
+    const y = new Date().getFullYear()
+    const c = db.prepare(`SELECT COUNT(*) AS c FROM invoices WHERE number LIKE ?`).get(`INV-${y}-%`).c
+    const number = `INV-${y}-${String(c + 1).padStart(4, '0')}`
+    const exclusive = Number(r.amount)
+    const vat = Math.round(exclusive * 0.15 * 100) / 100
+    const total = Math.round((exclusive + vat) * 100) / 100
+    const dueDate = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10)
+    db.prepare(
+      `INSERT INTO invoices (
+        id, number, client_id, date, due_date, status, notes, exclusive, vat_amount, total, amount_paid,
+        created_by, created_at, updated_at, doc_type, payment_note
+      ) VALUES (?,?,?,?,?,'unpaid',?,?,?,?,0,?,?,?,'invoice',?)`
+    ).run(
+      invId, number, r.client_id, today, dueDate,
+      `Auto retainer · schedule ${r.id.slice(0, 8)}`,
+      exclusive, vat, total, userId, now(), now(),
+      'Retainer payment due.'
+    )
+    db.prepare(
+      `INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,0)`
+    ).run(uid(), invId, r.description || 'Retainer', 1, exclusive)
+    const next = new Date(r.next_run)
+    next.setDate(next.getDate() + Number(r.interval_days || 30))
+    db.prepare(`UPDATE retainer_schedules SET next_run=?, last_invoice_id=? WHERE id=?`).run(
+      next.toISOString().slice(0, 10), invId, r.id
+    )
+    created.push({ schedule_id: r.id, invoice_id: invId, number })
+  }
+  return created
+}
+
