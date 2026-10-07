@@ -5,9 +5,9 @@ import { useAuth } from '../context/AuthContext'
 import PageHeader from '../components/PageHeader'
 
 const LABELS = {
-  invoice: { title: 'Invoices', sub: 'Tax invoices · payments · PDF', newTo: '/invoices/new', newLabel: 'New invoice', type: 'invoice' },
-  quote: { title: 'Quotes', sub: 'Quotations · convert to invoice when accepted', newTo: '/quotes/new', newLabel: 'New quote', type: 'quote' },
-  credit: { title: 'Credit notes', sub: 'Refunds and adjustments against invoices', newTo: '/credits/new', newLabel: 'New credit note', type: 'credit' },
+  invoice: { title: 'Invoices', sub: 'Tax invoices · payments · PDF', newTo: '/invoices/new', newLabel: 'New invoice', type: 'invoice', base: 'invoices' },
+  quote: { title: 'Quotes', sub: 'Quotations · convert to invoice when accepted', newTo: '/quotes/new', newLabel: 'New quote', type: 'quote', base: 'quotes' },
+  credit: { title: 'Credit notes', sub: 'Refunds and adjustments against invoices', newTo: '/credits/new', newLabel: 'New credit note', type: 'credit', base: 'credits' },
 }
 
 const STATUS_CLS = {
@@ -46,6 +46,9 @@ export default function DocList({ docType = 'invoice' }) {
 
   return (
     <div>
+      <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-brand">
+        {cfg.type === 'quote' ? 'Quotes module' : cfg.type === 'credit' ? 'Credit notes module' : 'Invoices module'}
+      </div>
       <PageHeader
         title={cfg.title}
         subtitle={cfg.sub}
@@ -88,7 +91,7 @@ export default function DocList({ docType = 'invoice' }) {
               {list.map((i) => (
                 <tr key={i.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
                   <td className="px-3 py-2.5">
-                    <Link className="font-semibold text-brand hover:underline" to={`/invoices/${i.id}`}>{i.number}</Link>
+                    <Link className="font-semibold text-brand hover:underline" to={`/${cfg.base}/${i.id}`}>{i.number}</Link>
                   </td>
                   <td className="px-3 py-2.5 truncate max-w-[140px] sm:max-w-none">{i.client_name}</td>
                   <td className="px-3 py-2.5 text-slate-500 hidden sm:table-cell">{i.date?.slice(0, 10)}</td>
