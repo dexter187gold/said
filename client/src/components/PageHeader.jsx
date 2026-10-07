@@ -1,8 +1,5 @@
 import React from 'react'
 
-/**
- * Corporate page header with title, subtitle, meta chips, and actions.
- */
 export default function PageHeader({ title, subtitle, meta = [], actions }) {
   return (
     <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
