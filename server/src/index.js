@@ -23,7 +23,7 @@ app.use(express.json({ limit: '8mb' }))
 
 app.get('/api/v1/health', (_req, res) => {
   const tplCount = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
-  res.json({ ok: true, service: 'said', version: '1.2.0', templates: tplCount })
+  res.json({ ok: true, service: 'said', version: '1.4.0', templates: tplCount })
 })
 
 app.get('/api/v1/company', requireAuth, (_req, res) => {
