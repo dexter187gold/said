@@ -46,6 +46,12 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const r = await api('/api/v1/auth/login', { method: 'POST', body: { email, password } })
+    if (r.data?.requires_2fa) return r.data
+    return applyAuth(r.data)
+  }
+
+  const login2fa = async (email, code) => {
+    const r = await api('/api/v1/auth/login/2fa', { method: 'POST', body: { email, code } })
     return applyAuth(r.data)
   }
 
@@ -89,6 +95,7 @@ export function AuthProvider({ children }) {
         setupComplete,
         oauthConfig,
         login,
+        login2fa,
         register,
         sendOtp,
         verifyOtp,
