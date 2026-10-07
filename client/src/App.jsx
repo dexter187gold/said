@@ -47,9 +47,11 @@ export default function App() {
                 <Route path="/invoices/new" element={<InvoiceEdit />} />
                 <Route path="/invoices/:id" element={<InvoiceEdit />} />
                 <Route path="/quotes" element={<Quotes />} />
-                <Route path="/quotes/new" element={<InvoiceEdit defaultType="quote" />} />
+                <Route path="/quotes/new" element={<InvoiceEdit />} />
+                <Route path="/quotes/:id" element={<InvoiceEdit />} />
                 <Route path="/credits" element={<Credits />} />
-                <Route path="/credits/new" element={<InvoiceEdit defaultType="credit" />} />
+                <Route path="/credits/new" element={<InvoiceEdit />} />
+                <Route path="/credits/:id" element={<InvoiceEdit />} />
                 <Route path="/tickets" element={<Tickets />} />
                 <Route path="/clients" element={<Clients />} />
                 <Route path="/documents" element={<Documents />} />
