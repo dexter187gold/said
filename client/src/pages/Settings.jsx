@@ -194,7 +194,7 @@ export default function Settings() {
           </div>
         </div>
         <button type="button" className="btn-outline !text-xs" onClick={reset}>Reset appearance</button>
-      </div>
+      </div>}
 
       <form className="space-y-4" onSubmit={save}>
         {tab === 'invoice' && (

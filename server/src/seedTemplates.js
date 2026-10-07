@@ -1,6 +1,8 @@
 /**
  * Compact seed: 100+ categorized document templates for SAID
  */
+import { PC_REPAIR_QUOTE_TEMPLATES } from './templates/pcRepairQuotes.js'
+
 const baseStyle = `body{font-family:system-ui,sans-serif;color:#0f172a;padding:36px;max-width:820px;margin:0 auto;font-size:14px;line-height:1.5}
 .brand{color:#007A4D;font-weight:800;letter-spacing:.08em;font-size:11px;text-transform:uppercase}
 h1{margin:.35rem 0 1rem;font-size:24px}h2{font-size:16px;margin:1.2rem 0 .5rem;color:#007A4D}
@@ -170,6 +172,17 @@ for (const d of defs) {
 }
 for (const [id, label, category, business_types] of catalog) {
   T.push({ id, label, category, business_types, description: label, html: wrap(label, genericBody(label)) })
+}
+
+for (const t of PC_REPAIR_QUOTE_TEMPLATES) {
+  T.push({
+    id: t.id,
+    label: t.label,
+    category: t.category,
+    business_types: t.business_types,
+    description: t.description,
+    html: t.html,
+  })
 }
 
 export const TEMPLATE_SEED = T
