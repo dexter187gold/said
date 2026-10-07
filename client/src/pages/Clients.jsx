@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
 import PageHeader from '../components/PageHeader'
+import { EmptyState } from '../components/EmptyState'
 
 const empty = { name: '', email: '', phone: '', address: '', vat_number: '', notes: '', tags: '', credit_limit: '' }
 

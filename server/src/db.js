@@ -230,10 +230,19 @@ export function seedIfEmpty() {
       VALUES ('main', 'SA Invoice Desk', 'billing@said.local', '011 000 0000', '4XXXXXXXXX', 'Johannesburg, South Africa', 'FNB', '62800000000', '250655', 'pc_repair', 1)`).run()
   }
   const existing = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
+  const insTpl = db.prepare(`INSERT OR REPLACE INTO document_templates (id, label, category, business_types, description, html, is_system, updated_at) VALUES (?,?,?,?,?,?,1,?)`)
+  const tsTpl = now()
   if (existing < 50) {
-    const ins = db.prepare(`INSERT OR REPLACE INTO document_templates (id, label, category, business_types, description, html, is_system, updated_at) VALUES (?,?,?,?,?,?,1,?)`)
-    const ts = now()
-    const tx = db.transaction(() => { for (const t of TEMPLATE_SEED) ins.run(t.id, t.label, t.category, t.business_types, t.description, t.html, ts) })
+    const tx = db.transaction(() => { for (const t of TEMPLATE_SEED) insTpl.run(t.id, t.label, t.category, t.business_types, t.description, t.html, tsTpl) })
+    tx()
+  } else {
+    // Refresh craft layouts (hourly / flat / ad-hoc quotes + core invoices)
+    const critical = TEMPLATE_SEED.filter((t) =>
+      t.id.startsWith('quote_') || t.id === 'tax_invoice_full' || t.id === 'job_card' || t.id === 'quotation'
+    )
+    const tx = db.transaction(() => {
+      for (const t of critical) insTpl.run(t.id, t.label, t.category, t.business_types, t.description, t.html, tsTpl)
+    })
     tx()
   }
   const set = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)')

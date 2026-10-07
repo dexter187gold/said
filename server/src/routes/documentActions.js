@@ -93,14 +93,41 @@ documentActionsRouter.post('/:type/:id/whatsapp-link', (req, res) => {
     if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
     phone = (inv.client_phone || '').replace(/\D/g, '')
     if (phone.startsWith('0')) phone = '27' + phone.slice(1)
-    const company = db.prepare(`SELECT name FROM company WHERE id = 'main'`).get()
-    text = encodeURIComponent(
-      `Hi ${inv.client_name || 'there'},\n\n` +
-        `${company?.name || 'SAID'} ${type} *${inv.number}* for R${Number(inv.total || 0).toFixed(2)}.\n` +
-        `Status: ${inv.status}\n` +
-        (inv.due_date ? `Due: ${inv.due_date}\n` : '') +
-        `\nPlease settle via EFT. Thank you!`
-    )
+    const company = db.prepare(`SELECT name, phone FROM company WHERE id = 'main'`).get()
+    const co = company?.name || 'SAID'
+    const first = (inv.client_name || 'there').split(/\s+/)[0]
+    if (type === 'quote') {
+      text = encodeURIComponent(
+        `Hi ${first} 👋\n\n` +
+          `*${co} — Quotation*\n` +
+          `━━━━━━━━━━━━━━━━\n` +
+          `📋 *Ref:* ${inv.number}\n` +
+          `💰 *Amount:* R${Number(inv.total || 0).toFixed(2)}\n` +
+          (inv.devices ? `🖥 *Devices:* ${inv.devices}\n` : '') +
+          (inv.service_type ? `🔧 *Service:* ${inv.service_type}\n` : '') +
+          (inv.due_date ? `📅 *Valid until:* ${inv.due_date}\n` : '') +
+          `\nThis is a formal quote — not an invoice. ` +
+          `Accept in writing or by handing over devices to proceed.\n\n` +
+          `Questions? Call ${company?.phone || 'us'} — happy to explain anything in plain language.\n\n` +
+          `_Thank you for considering us._\n— ${co}`
+      )
+    } else if (type === 'credit') {
+      text = encodeURIComponent(
+        `Hi ${first},\n\n*${co}* credit note *${inv.number}* for R${Number(inv.total || 0).toFixed(2)}.\n\n— ${co}`
+      )
+    } else {
+      text = encodeURIComponent(
+        `Hi ${first} 👋\n\n` +
+          `*${co} — Tax invoice*\n` +
+          `━━━━━━━━━━━━━━━━\n` +
+          `📋 *${inv.number}*\n` +
+          `💰 *Total:* R${Number(inv.total || 0).toFixed(2)}\n` +
+          `📌 *Status:* ${inv.status}\n` +
+          (inv.due_date ? `📅 *Due:* ${inv.due_date}\n` : '') +
+          `\nPlease settle via EFT / cash as arranged. Devices released after payment confirmation where applicable.\n\n` +
+          `Thank you for your business.\n— ${co}`
+      )
+    }
   } else if (type === 'ticket') {
     const t = db
       .prepare(

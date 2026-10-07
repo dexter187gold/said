@@ -32,11 +32,23 @@ export default function InvoiceEdit() {
   const [loaded, setLoaded] = useState(null)
   const [templateId, setTemplateId] = useState('')
   const [templates, setTemplates] = useState([])
+  const [accountType, setAccountType] = useState('COD Account')
 
   useEffect(() => {
     api('/api/v1/clients').then((r) => setClients(r.data)).catch(() => {})
     api('/api/v1/documents/templates').then((r) => setTemplates(r.data || [])).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!isNew) return
+    if (pathType === 'quote') {
+      setTemplateId((prev) => prev || 'quote_flatrate_cod')
+      setPaymentNote('100% due on completion and hand-over / collection, unless stated otherwise in writing. Cash, EFT (with proof) or instant payment. Devices released only after payment confirmation.')
+      setStatus('unpaid')
+    } else if (pathType === 'invoice') {
+      setTemplateId((prev) => prev || 'tax_invoice_full')
+    }
+  }, [isNew, pathType])
 
   useEffect(() => {
     if (isNew) return
@@ -53,6 +65,7 @@ export default function InvoiceEdit() {
         setPaymentNote(d.payment_note || '')
         setLines(d.lines?.length ? d.lines : [{ description: '', qty: 1, price: 0 }])
         setTemplateId(d.template_id || '')
+        setAccountType(d.account_type || 'COD Account')
       })
       .catch((e) => notify(e.message, 'error'))
   }, [id, isNew])
@@ -67,6 +80,7 @@ export default function InvoiceEdit() {
     client_id: clientId,
     doc_type: loaded?.doc_type || pathType,
     template_id: templateId || null,
+    account_type: accountType || null,
     status,
     notes,
     devices,
@@ -176,11 +190,20 @@ export default function InvoiceEdit() {
           </div>
           <div>
             <label className="label">Layout template (layer 1)</label>
-            <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+            <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)} aria-label="Layout template">
               <option value="">Company default</option>
-              {templates.map((x) => (
-                <option key={x.id} value={x.id}>{x.label}</option>
-              ))}
+              {pathType === 'quote' && (
+                <>
+                  <option value="quote_hourly_cod">Hourly model (COD)</option>
+                  <option value="quote_flatrate_cod">Flat rate package (COD)</option>
+                  <option value="quote_adhoc_cod">Ad-hoc rate card (COD)</option>
+                </>
+              )}
+              {templates
+                .filter((x) => pathType !== 'quote' || !x.id.startsWith('quote_'))
+                .map((x) => (
+                  <option key={x.id} value={x.id}>{x.label}</option>
+                ))}
             </select>
           </div>
           <div>
@@ -192,6 +215,15 @@ export default function InvoiceEdit() {
           <div>
             <label className="label">PO / ref</label>
             <input className="input" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Account type</label>
+            <select className="input" value={accountType} onChange={(e) => setAccountType(e.target.value)} aria-label="Account type">
+              <option value="COD Account">COD Account</option>
+              <option value="Account">Account (terms)</option>
+              <option value="Retainer">Retainer</option>
+              <option value="Cash">Cash</option>
+            </select>
           </div>
           <div>
             <label className="label">Devices</label>

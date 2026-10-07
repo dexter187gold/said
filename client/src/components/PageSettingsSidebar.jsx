@@ -224,6 +224,45 @@ function PrefsForm({ pageKey, tab, prefs, onChange, saving }) {
         </div>
       )
     }
+    if (pageKey === 'quote') {
+      return (
+        <div className="space-y-4">
+          <Field label="Default layout template">
+            <select
+              className="w-full rounded-lg border border-slate-200 bg-transparent px-3 py-2 text-sm dark:border-slate-600"
+              value={prefs.default_template || 'quote_flatrate_cod'}
+              onChange={(e) => set('default_template', e.target.value)}
+            >
+              <option value="quote_hourly_cod">Hourly model (COD)</option>
+              <option value="quote_flatrate_cod">Flat rate package (COD)</option>
+              <option value="quote_adhoc_cod">Ad-hoc rate card (COD)</option>
+              <option value="quotation">Generic quotation</option>
+            </select>
+          </Field>
+          <Field label="Default account type">
+            <select
+              className="w-full rounded-lg border border-slate-200 bg-transparent px-3 py-2 text-sm dark:border-slate-600"
+              value={prefs.default_account_type || 'COD Account'}
+              onChange={(e) => set('default_account_type', e.target.value)}
+            >
+              <option value="COD Account">COD Account</option>
+              <option value="Account">Account (terms)</option>
+              <option value="Retainer">Retainer</option>
+            </select>
+          </Field>
+          <Toggle label="Show devices field" checked={prefs.show_devices !== false} onChange={(v) => set('show_devices', v)} />
+          <Toggle label="Show service type" checked={prefs.show_service_type !== false} onChange={(v) => set('show_service_type', v)} />
+          <Field label="Default validity (days)">
+            <input
+              type="number"
+              className="w-full rounded-lg border border-slate-200 bg-transparent px-3 py-2 text-sm dark:border-slate-600"
+              value={prefs.validity_days ?? 14}
+              onChange={(e) => set('validity_days', Number(e.target.value))}
+            />
+          </Field>
+        </div>
+      )
+    }
     if (pageKey === 'ticket') {
       return (
         <div className="space-y-4">

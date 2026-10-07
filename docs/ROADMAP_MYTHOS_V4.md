@@ -72,3 +72,7 @@ Focus: every document the client sees feels premium and trustworthy.
 ## Delivery rule
 
 Ship **one big integrated commit** when possible (this cycle’s job-card + PDF + WhatsApp pack is the model): front + back + docs together, then `git pull` on Termux.
+
+## Progress log
+
+- **2026-10-08 Athena-Wood craft batch:** empty/skeleton UI, DocList filters+search+a11y, quote defaults (hourly/flat/ad-hoc), account type dropdown, quote page-settings, trust WhatsApp for quotes/invoices, template reseed for COD layouts, Clients empty state.
