@@ -2,39 +2,108 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --said-accent: #007A4D;
+  --said-blur: 16px;
+  --said-glass-opacity: 0.72;
+  --said-radius: 16px;
+}
+
 @layer base {
   html {
     -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
   }
   body {
-    @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+    @apply antialiased text-slate-900 dark:text-slate-100 min-h-screen;
+    background:
+      radial-gradient(1200px 600px at 10% -10%, color-mix(in srgb, var(--said-accent) 18%, transparent), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, color-mix(in srgb, var(--said-accent) 12%, transparent), transparent 55%),
+      theme('colors.slate.50');
+  }
+  html.dark body {
+    background:
+      radial-gradient(1200px 600px at 10% -10%, color-mix(in srgb, var(--said-accent) 22%, transparent), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, color-mix(in srgb, var(--said-accent) 14%, transparent), transparent 55%),
+      theme('colors.slate.950');
   }
 }
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold transition-all duration-200 ease-in-out disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-sm font-semibold transition-all duration-200 ease-in-out disabled:opacity-50;
+    border-radius: calc(var(--said-radius) * 0.7);
   }
   .btn-primary {
-    @apply btn bg-brand text-white hover:bg-brand-dark active:scale-[0.98];
+    @apply btn text-white active:scale-[0.98];
+    background: var(--said-accent);
   }
+  .btn-primary:hover { filter: brightness(0.92); }
   .btn-outline {
-    @apply btn border border-slate-200 dark:border-slate-700 bg-transparent hover:border-brand hover:text-brand;
+    @apply btn border border-slate-200/80 dark:border-slate-700/80 bg-transparent;
+  }
+  .btn-outline:hover {
+    border-color: var(--said-accent);
+    color: var(--said-accent);
   }
   .btn-ghost {
-    @apply btn hover:bg-slate-100 dark:hover:bg-slate-800;
+    @apply btn hover:bg-black/5 dark:hover:bg-white/5;
+  }
+  .btn-share {
+    @apply btn text-white text-xs !py-1.5 !px-3;
   }
   .input {
-    @apply w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition-all;
+    @apply w-full px-3 py-2 text-sm outline-none transition-all border border-slate-200/80 dark:border-slate-700/80;
+    border-radius: calc(var(--said-radius) * 0.7);
+    background: color-mix(in srgb, white 90%, transparent);
+  }
+  html.dark .input {
+    background: color-mix(in srgb, theme('colors.slate.900') 85%, transparent);
+  }
+  .input:focus {
+    border-color: var(--said-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--said-accent) 22%, transparent);
   }
   .label {
     @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500;
   }
   .card {
-    @apply rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm transition-all duration-200;
+    border-radius: var(--said-radius);
+    @apply border shadow-sm transition-all duration-200;
+  }
+  html[data-style='glass'] .card {
+    border-color: color-mix(in srgb, white 35%, transparent);
+    background: color-mix(in srgb, white calc(var(--said-glass-opacity) * 100%), transparent);
+    backdrop-filter: blur(var(--said-blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--said-blur)) saturate(140%);
+    box-shadow: 0 8px 32px color-mix(in srgb, var(--said-accent) 8%, transparent);
+  }
+  html.dark[data-style='glass'] .card {
+    border-color: color-mix(in srgb, white 12%, transparent);
+    background: color-mix(in srgb, theme('colors.slate.900') calc(var(--said-glass-opacity) * 100%), transparent);
+  }
+  html[data-style='solid'] .card {
+    @apply border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900;
+  }
+  .glass-panel {
+    border-radius: var(--said-radius);
+    border: 1px solid color-mix(in srgb, white 30%, transparent);
+    background: color-mix(in srgb, white calc(var(--said-glass-opacity) * 100%), transparent);
+    backdrop-filter: blur(var(--said-blur)) saturate(150%);
+    -webkit-backdrop-filter: blur(var(--said-blur)) saturate(150%);
+  }
+  html.dark .glass-panel {
+    border-color: color-mix(in srgb, white 10%, transparent);
+    background: color-mix(in srgb, theme('colors.slate.900') calc(var(--said-glass-opacity) * 100%), transparent);
+  }
+  .page-scroll {
+    @apply overflow-y-auto overflow-x-hidden;
+    max-height: calc(100dvh - 7.5rem);
+    -webkit-overflow-scrolling: touch;
   }
 }
 
-table {
-  @apply border-collapse;
-}
+table { border-collapse: collapse; }
+.text-accent { color: var(--said-accent); }
+.bg-accent { background-color: var(--said-accent); }
+.border-accent { border-color: var(--said-accent); }
