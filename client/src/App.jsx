@@ -4,6 +4,7 @@ import { useAuth } from './context/AuthContext'
 import Shell from './components/Shell'
 import AppLogo from './components/AppLogo'
 import Login from './pages/Login'
+import Setup from './pages/Setup'
 import Home from './pages/Home'
 import Invoices from './pages/Invoices'
 import InvoiceEdit from './pages/InvoiceEdit'
@@ -17,11 +18,11 @@ import TemplateDesigner from './pages/TemplateDesigner'
 import About from './pages/About'
 
 function Guard({ children }) {
-  const { user, ready } = useAuth()
+  const { user, ready, setupComplete } = useAuth()
   if (!ready) {
     return (
-      <div className="grid min-h-screen place-items-center bg-gradient-to-br from-slate-950 to-brand">
-        <div className="text-center text-white">
+      <div className="grid min-h-screen place-items-center">
+        <div className="text-center">
           <AppLogo size={72} />
           <p className="mt-4 text-sm opacity-80">Loading SAID…</p>
         </div>
@@ -29,6 +30,15 @@ function Guard({ children }) {
     )
   }
   if (!user) return <Navigate to="/login" replace />
+  if (!setupComplete) return <Navigate to="/setup" replace />
+  return children
+}
+
+function SetupGuard({ children }) {
+  const { user, ready, setupComplete } = useAuth()
+  if (!ready) return null
+  if (!user) return <Navigate to="/login" replace />
+  if (setupComplete) return <Navigate to="/" replace />
   return children
 }
 
@@ -36,6 +46,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/setup" element={<SetupGuard><Setup /></SetupGuard>} />
       <Route
         path="/*"
         element={
