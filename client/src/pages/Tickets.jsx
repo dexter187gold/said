@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
 import PageHeader from '../components/PageHeader'
+import { EmptyState } from '../components/EmptyState'
 import DocumentActionBar from '../components/DocumentActionBar'
 
 const STATUSES = ['open', 'in_progress', 'waiting', 'resolved', 'closed']
@@ -383,7 +384,7 @@ export default function Tickets() {
                     <td className="px-2 py-2 text-xs tabular-nums">{fmtTime(t.time_spent_seconds)}</td>
                   </tr>
                 )})}
-                {!list.length && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500">No tickets</td></tr>}
+                {!list.length && <tr><td colSpan={7}><EmptyState title="No tickets" body="Log a job card for drivers, repairs, or on-site work. Status updates can notify clients on WhatsApp." /></td></tr>}
               </tbody>
             </table>
           </div></div>

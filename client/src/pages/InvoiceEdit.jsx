@@ -91,6 +91,18 @@ export default function InvoiceEdit() {
     lines: lines.map((l) => ({ description: l.description, qty: Number(l.qty), price: Number(l.price) })),
   })
 
+  const convertQuote = async () => {
+    if (!id || isNew) return
+    if (!confirm('Convert this quote to a tax invoice?')) return
+    try {
+      const r = await api(`/api/v1/invoices/${id}/convert`, { method: 'POST' })
+      notify('Quote converted to invoice')
+      nav(`/invoices/${r.data.id}`)
+    } catch (e) {
+      notify(e.message, 'error')
+    }
+  }
+
   const save = async (e) => {
     e.preventDefault()
     try {
@@ -263,7 +275,14 @@ export default function InvoiceEdit() {
           </div>
         </div>
 
-        <button className="btn-primary" type="submit">{isNew ? `Create ${typeLabel.toLowerCase()}` : 'Save'}</button>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-primary" type="submit">{isNew ? `Create ${typeLabel.toLowerCase()}` : 'Save'}</button>
+          {!isNew && pathType === 'quote' && (
+            <button type="button" className="btn-outline" onClick={convertQuote}>
+              Convert → invoice
+            </button>
+          )}
+        </div>
       </form>
 
       {!isNew && pathType === 'invoice' && (

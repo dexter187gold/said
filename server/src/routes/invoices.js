@@ -166,20 +166,29 @@ invoicesRouter.get('/:id/pdf', async (req, res, next) => {
       )
       .join('')
     const fallbackHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-body{font-family:system-ui,sans-serif;font-size:12px;padding:16px;color:#0f172a}
-.brand{font-size:18px;font-weight:800;color:#007A4D}table{width:100%;border-collapse:collapse;margin:16px 0}
-th,td{padding:8px;border-bottom:1px solid #e2e8f0;text-align:left}.grand{font-weight:800;color:#007A4D}
-.meta{color:#64748b;font-size:11px}</style></head><body>
-<div class="brand">{{company_name}}</div>
-<p class="meta">{{company_address}} · {{company_phone}} · VAT {{company_vat}}</p>
-<p><strong>{{number}}</strong> · {{date}} · {{status}}</p>
-<p><strong>Bill to:</strong> {{client_name}}<br/>{{client_address}}</p>
-<table><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Amount</th></tr></thead>
+body{font-family:Segoe UI,system-ui,sans-serif;font-size:11px;padding:16px;color:#0f172a;line-height:1.45}
+.header{display:flex;justify-content:space-between;border-bottom:3px solid #007A4D;padding-bottom:10px;margin-bottom:12px}
+.brand{font-size:18px;font-weight:800;color:#007A4D}
+.meta{color:#64748b;font-size:10px}
+table{width:100%;border-collapse:collapse;margin:12px 0}
+th{background:#1e3a5f;color:#fff;padding:7px 8px;text-align:left;font-size:9px;text-transform:uppercase}
+td{padding:7px 8px;border-bottom:1px solid #e2e8f0}
+.grand{font-weight:800;color:#007A4D;font-size:14px}
+.box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;margin:8px 0}
+.right{text-align:right}
+</style></head><body>
+<div class="header">
+  <div><div class="brand">{{company_name}}</div>
+  <div class="meta">{{company_address}} · {{company_phone}} · VAT {{company_vat}}</div></div>
+  <div class="right"><strong>{{number}}</strong><br/><span class="meta">{{date}} · {{status}}</span></div>
+</div>
+<div class="box"><strong>Bill to</strong><br/>{{client_name}}<br/>{{client_address}}<br/>{{client_phone}}</div>
+<table><thead><tr><th>Description</th><th>Qty</th><th class="right">Price</th><th class="right">Amount</th></tr></thead>
 <tbody>{{lines_html}}</tbody></table>
-<p>Exclusive {{exclusive}} · VAT {{vat_amount}} · <span class="grand">Total {{total}}</span></p>
-<p>Paid {{amount_paid}} · Balance {{balance}}</p>
+<p class="right">Exclusive {{exclusive}} · VAT {{vat_amount}} · <span class="grand">Total {{total}}</span></p>
+<p class="right meta">Paid {{amount_paid}} · Balance {{balance}}</p>
 <p class="meta">{{payment_note}}</p>
-<p class="meta">{{company_bank}} · Acc {{company_account}} · Branch {{company_branch}}</p>
+<p class="meta">Bank: {{company_bank}} · Acc {{company_account}} · Branch {{company_branch}}</p>
 </body></html>`
     const templateId = inv.template_id || getDefaultTemplateId(inv.doc_type || 'invoice')
     const instance = invoiceInstanceVars(inv)
