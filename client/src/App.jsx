@@ -7,11 +7,14 @@ import Login from './pages/Login'
 import Home from './pages/Home'
 import Invoices from './pages/Invoices'
 import InvoiceEdit from './pages/InvoiceEdit'
+import Quotes from './pages/Quotes'
+import Credits from './pages/Credits'
 import Tickets from './pages/Tickets'
 import Clients from './pages/Clients'
 import Documents from './pages/Documents'
 import Settings from './pages/Settings'
 import TemplateDesigner from './pages/TemplateDesigner'
+import About from './pages/About'
 
 function Guard({ children }) {
   const { user, ready } = useAuth()
@@ -43,12 +46,17 @@ export default function App() {
                 <Route path="/invoices" element={<Invoices />} />
                 <Route path="/invoices/new" element={<InvoiceEdit />} />
                 <Route path="/invoices/:id" element={<InvoiceEdit />} />
+                <Route path="/quotes" element={<Quotes />} />
+                <Route path="/quotes/new" element={<InvoiceEdit defaultType="quote" />} />
+                <Route path="/credits" element={<Credits />} />
+                <Route path="/credits/new" element={<InvoiceEdit defaultType="credit" />} />
                 <Route path="/tickets" element={<Tickets />} />
                 <Route path="/clients" element={<Clients />} />
                 <Route path="/documents" element={<Documents />} />
                 <Route path="/documents/designer" element={<TemplateDesigner />} />
                 <Route path="/documents/designer/:id" element={<TemplateDesigner />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/about" element={<About />} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
