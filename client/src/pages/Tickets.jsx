@@ -6,24 +6,28 @@ import PageHeader from '../components/PageHeader'
 const STATUSES = ['open', 'in_progress', 'waiting', 'resolved', 'closed']
 const PRIOS = ['low', 'normal', 'high', 'urgent']
 const CATS = ['support', 'repair', 'install', 'onsite', 'remote', 'billing', 'sales', 'jobcard', 'other']
+const FILTER_KEY = 'said_ticket_filters'
 
 function fmtTime(sec) {
   const s = Math.max(0, Math.floor(sec || 0))
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const r = s % 60
-  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m ${String(r).padStart(2, '0')}s`
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
   return `${m}m ${String(r).padStart(2, '0')}s`
 }
-function fmtMoney(n) {
-  return `R ${Number(n || 0).toFixed(2)}`
+function fmtMoney(n) { return `R ${Number(n || 0).toFixed(2)}` }
+function slaLabel(iso) {
+  if (!iso) return null
+  const left = new Date(iso).getTime() - Date.now()
+  if (left < 0) return { text: 'SLA breached', cls: 'text-red-600' }
+  const h = Math.floor(left / 3600000), m = Math.floor((left % 3600000) / 60000)
+  return { text: `SLA ${h}h ${m}m`, cls: left < 3600000 ? 'text-amber-600' : 'text-emerald-600' }
 }
 
 const emptyJob = {
   title: '', description: '', priority: 'normal', category: 'repair', status: 'open',
-  client_id: '', tags: '', due_date: '', estimated_minutes: '', notes: '',
-  site_address: '', device_info: '', serial_numbers: '', reported_by: '',
-  fault_reported: '', work_done: '',
+  client_id: '', assignee_id: '', tags: '', due_date: '', estimated_minutes: '',
+  warranty: 0, sla_hours: '', site_address: '', device_info: '', serial_numbers: '',
+  reported_by: '', fault_reported: '', parts: [],
 }
 
 export default function Tickets() {
@@ -31,6 +35,7 @@ export default function Tickets() {
   const [list, setList] = useState([])
   const [metrics, setMetrics] = useState(null)
   const [clients, setClients] = useState([])
+  const [staff, setStaff] = useState([])
   const [hourlyRate, setHourlyRate] = useState(450)
   const [selected, setSelected] = useState(null)
   const [detail, setDetail] = useState(null)
@@ -39,9 +44,14 @@ export default function Tickets() {
   const [comment, setComment] = useState('')
   const [internal, setInternal] = useState(false)
   const [manualMin, setManualMin] = useState('')
-  const [filter, setFilter] = useState({ status: '', priority: '', category: '', q: '' })
+  const [view, setView] = useState('table')
+  const [filter, setFilter] = useState(() => {
+    try { return { status: '', priority: '', category: '', q: '', assignee_id: '', warranty: '', ...JSON.parse(localStorage.getItem(FILTER_KEY) || '{}') } }
+    catch { return { status: '', priority: '', category: '', q: '', assignee_id: '', warranty: '' } }
+  })
   const [liveTimer, setLiveTimer] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [partDraft, setPartDraft] = useState({ name: '', qty: 1, cost: 0 })
   const tickRef = useRef(null)
 
   const loadList = () => {
@@ -49,6 +59,8 @@ export default function Tickets() {
     if (filter.status) params.set('status', filter.status)
     if (filter.priority) params.set('priority', filter.priority)
     if (filter.category) params.set('category', filter.category)
+    if (filter.assignee_id) params.set('assignee_id', filter.assignee_id)
+    if (filter.warranty === '1') params.set('warranty', '1')
     if (filter.q) params.set('q', filter.q)
     const qs = params.toString() ? `?${params}` : ''
     return api(`/api/v1/tickets${qs}`).then((r) => setList(r.data || [])).catch((e) => notify(e.message, 'error'))
@@ -56,21 +68,21 @@ export default function Tickets() {
   const loadMetrics = () => api('/api/v1/tickets/metrics').then((r) => setMetrics(r.data)).catch(() => {})
 
   useEffect(() => {
-    loadList()
-    loadMetrics()
+    try { localStorage.setItem(FILTER_KEY, JSON.stringify(filter)) } catch {}
+    loadList(); loadMetrics()
+  }, [filter.status, filter.priority, filter.category, filter.assignee_id, filter.warranty])
+
+  useEffect(() => {
     api('/api/v1/clients').then((r) => setClients(r.data || [])).catch(() => {})
-    api('/api/v1/settings').then((r) => {
-      const hr = r.data?.settings?.hourly_rate
-      if (hr != null) setHourlyRate(Number(hr) || 450)
-    }).catch(() => {})
-  }, [filter.status, filter.priority, filter.category])
+    api('/api/v1/tickets/staff').then((r) => setStaff(r.data || [])).catch(() => {})
+    api('/api/v1/settings').then((r) => { const hr = r.data?.settings?.hourly_rate; if (hr != null) setHourlyRate(Number(hr) || 450) }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (detail?.timer_started_at) {
       const start = new Date(detail.timer_started_at).getTime()
       const tick = () => setLiveTimer(Math.floor((Date.now() - start) / 1000))
-      tick()
-      tickRef.current = setInterval(tick, 1000)
+      tick(); tickRef.current = setInterval(tick, 1000)
       return () => clearInterval(tickRef.current)
     }
     setLiveTimer(0)
@@ -79,12 +91,9 @@ export default function Tickets() {
 
   const openTicket = async (id) => {
     setSelected(id)
-    try {
-      const r = await api(`/api/v1/tickets/${id}`)
-      setDetail(r.data)
-    } catch (e) { notify(e.message, 'error') }
+    try { setDetail((await api(`/api/v1/tickets/${id}`)).data) }
+    catch (e) { notify(e.message, 'error') }
   }
-
   const setJ = (k, v) => setJob((j) => ({ ...j, [k]: v }))
 
   const createJobcard = async (e) => {
@@ -99,288 +108,224 @@ export default function Tickets() {
         job.site_address && `Site: ${job.site_address}`,
         job.reported_by && `Reported by: ${job.reported_by}`,
         job.description,
-        job.work_done && `Work done: ${job.work_done}`,
       ].filter(Boolean).join('\n')
-      const r = await api('/api/v1/tickets', {
-        method: 'POST',
-        body: {
-          title: job.title.trim(),
-          description: description || null,
-          priority: job.priority,
-          category: job.category,
-          status: job.status,
-          client_id: job.client_id || null,
-          tags: job.tags || null,
-          due_date: job.due_date || null,
-          estimated_minutes: job.estimated_minutes ? Number(job.estimated_minutes) : null,
-          notes: job.notes || null,
-        },
-      })
-      notify('Job card created')
-      setShowJobcard(false)
-      setJob(emptyJob)
-      await loadList()
-      loadMetrics()
-      openTicket(r.data.id)
+      const r = await api('/api/v1/tickets', { method: 'POST', body: {
+        title: job.title.trim(), description: description || null, priority: job.priority, category: job.category,
+        status: 'open', client_id: job.client_id || null, assignee_id: job.assignee_id || null, tags: job.tags || null,
+        due_date: job.due_date || null, estimated_minutes: job.estimated_minutes ? Number(job.estimated_minutes) : null,
+        warranty: job.warranty ? 1 : 0, sla_hours: job.sla_hours ? Number(job.sla_hours) : null, parts: job.parts || [],
+      }})
+      notify('Job card created'); setShowJobcard(false); setJob(emptyJob)
+      await loadList(); loadMetrics(); openTicket(r.data.id)
     } catch (err) { notify(err.message, 'error') }
     finally { setBusy(false) }
   }
 
-  const patchStatus = async (status) => {
+  const patch = async (body) => {
     if (!selected) return
-    try {
-      await api(`/api/v1/tickets/${selected}`, { method: 'PATCH', body: { status } })
-      openTicket(selected); loadList(); loadMetrics()
-    } catch (e) { notify(e.message, 'error') }
+    try { await api(`/api/v1/tickets/${selected}`, { method: 'PATCH', body }); openTicket(selected); loadList(); loadMetrics() }
+    catch (e) { notify(e.message, 'error') }
   }
-
-  const timerStart = async () => {
-    try {
-      await api(`/api/v1/tickets/${selected}/timer/start`, { method: 'POST' })
-      openTicket(selected); loadList(); notify('Timer started')
-    } catch (e) { notify(e.message, 'error') }
+  const kanbanMove = async (id, status) => {
+    try { await api(`/api/v1/tickets/${id}`, { method: 'PATCH', body: { status } }); loadList(); loadMetrics(); if (selected === id) openTicket(id); notify(`Moved to ${status.replace('_', ' ')}`) }
+    catch (e) { notify(e.message, 'error') }
   }
-  const timerStop = async () => {
-    try {
-      const r = await api(`/api/v1/tickets/${selected}/timer/stop`, { method: 'POST' })
-      notify(`Logged ${fmtTime(r.data.seconds_added)}`)
-      openTicket(selected); loadList(); loadMetrics()
-    } catch (e) { notify(e.message, 'error') }
-  }
+  const timerStart = async () => { try { await api(`/api/v1/tickets/${selected}/timer/start`, { method: 'POST' }); openTicket(selected); loadList(); notify('Timer started') } catch (e) { notify(e.message, 'error') } }
+  const timerStop = async () => { try { const r = await api(`/api/v1/tickets/${selected}/timer/stop`, { method: 'POST' }); notify(`Logged ${fmtTime(r.data.seconds_added)}`); openTicket(selected); loadList(); loadMetrics() } catch (e) { notify(e.message, 'error') } }
   const addManual = async () => {
     const mins = Number(manualMin)
     if (!mins || mins <= 0) return notify('Enter minutes', 'error')
-    try {
-      await api(`/api/v1/tickets/${selected}/time`, { method: 'POST', body: { seconds: Math.round(mins * 60), note: 'Manual log' } })
-      setManualMin(''); openTicket(selected); loadList(); notify('Time logged')
-    } catch (e) { notify(e.message, 'error') }
+    try { await api(`/api/v1/tickets/${selected}/time`, { method: 'POST', body: { seconds: Math.round(mins * 60), note: 'Manual log' } }); setManualMin(''); openTicket(selected); loadList(); notify('Time logged') }
+    catch (e) { notify(e.message, 'error') }
   }
   const addComment = async () => {
     if (!comment.trim()) return
-    try {
-      await api(`/api/v1/tickets/${selected}/comments`, { method: 'POST', body: { text: comment, internal } })
-      setComment(''); openTicket(selected)
-    } catch (e) { notify(e.message, 'error') }
+    try { await api(`/api/v1/tickets/${selected}/comments`, { method: 'POST', body: { text: comment, internal } }); setComment(''); openTicket(selected) }
+    catch (e) { notify(e.message, 'error') }
   }
-
-  const displaySeconds = useMemo(() => {
-    if (!detail) return 0
-    return (detail.time_spent_seconds || 0) + (detail.timer_started_at ? liveTimer : 0)
-  }, [detail, liveTimer])
+  const displaySeconds = useMemo(() => detail ? (detail.time_spent_seconds || 0) + (detail.timer_started_at ? liveTimer : 0) : 0, [detail, liveTimer])
   const billablePreview = useMemo(() => (displaySeconds / 3600) * hourlyRate, [displaySeconds, hourlyRate])
-
   const billInvoice = async () => {
-    if (!detail?.client_id) return notify('Assign a client on this ticket first', 'error')
-    if (!window.confirm(`Bill ${fmtTime(displaySeconds)} at R${hourlyRate}/hr to invoice?`)) return
+    if (!detail?.client_id) return notify('Assign a client first', 'error')
+    if (!window.confirm(`Bill ${fmtTime(displaySeconds)} at R${hourlyRate}/hr?`)) return
     setBusy(true)
-    try {
-      const r = await api(`/api/v1/tickets/${selected}/bill`, { method: 'POST', body: { hourly_rate: hourlyRate, mark_resolved: true } })
-      notify(`Invoice ${r.data.number} · ${fmtMoney(r.data.total)}`)
-      openTicket(selected); loadList(); loadMetrics()
-    } catch (e) { notify(e.message, 'error') }
+    try { const r = await api(`/api/v1/tickets/${selected}/bill`, { method: 'POST', body: { hourly_rate: hourlyRate, mark_resolved: true } }); notify(`Invoice ${r.data.number} · ${fmtMoney(r.data.total)}`); openTicket(selected); loadList(); loadMetrics() }
+    catch (e) { notify(e.message, 'error') }
     finally { setBusy(false) }
   }
-
+  const printJob = async () => {
+    if (!selected) return
+    try {
+      const res = await api(`/api/v1/tickets/${selected}/print`, { raw: true })
+      if (!res.ok) throw new Error('Print failed')
+      const html = await res.text()
+      const w = window.open('', '_blank')
+      if (w) { w.document.write(html); w.document.close() }
+    } catch (e) { notify(e.message, 'error') }
+  }
+  const whatsappStatus = () => {
+    if (!detail) return
+    const text = `SAID Job Update\n${detail.title}\nStatus: ${detail.status}\nTime: ${fmtTime(displaySeconds)}\n${detail.client_name || ''}`
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
+  }
+  const addPartToJob = () => {
+    if (!partDraft.name.trim()) return
+    setJob((j) => ({ ...j, parts: [...(j.parts || []), { ...partDraft, qty: Number(partDraft.qty) || 1, cost: Number(partDraft.cost) || 0 }] }))
+    setPartDraft({ name: '', qty: 1, cost: 0 })
+  }
+  const saveParts = async () => {
+    if (!detail) return
+    const parts = [...(detail.parts || [])]
+    if (partDraft.name.trim()) parts.push({ name: partDraft.name.trim(), qty: Number(partDraft.qty) || 1, cost: Number(partDraft.cost) || 0 })
+    await patch({ parts }); setPartDraft({ name: '', qty: 1, cost: 0 })
+  }
   const prioColor = (p) => ({ urgent: 'text-red-600', high: 'text-orange-600', normal: 'text-slate-600', low: 'text-slate-400' }[p] || '')
 
   return (
     <div className="space-y-3">
-      <PageHeader
-        title="Tickets & job cards"
-        subtitle="Live board · timers · bill labour to invoice"
-        meta={[metrics ? `${metrics.open} open` : '—', metrics ? `${metrics.urgent} urgent` : '—', metrics ? `${metrics.total_time_hours}h logged` : '—', `R${hourlyRate}/hr`]}
-        actions={<button type="button" className="btn-primary" onClick={() => setShowJobcard(true)}>+ New job card</button>}
-      />
+      <PageHeader title="Tickets & job cards" subtitle="Q1 · kanban · SLA · parts · warranty · assignees"
+        meta={[metrics ? `${metrics.open} open` : '—', metrics?.sla_breached ? `${metrics.sla_breached} SLA` : 'SLA ok', metrics?.warranty_open != null ? `${metrics.warranty_open} warranty` : '', `R${hourlyRate}/hr`]}
+        actions={<div className="flex flex-wrap gap-2">
+          <button type="button" className={`btn-outline !text-xs ${view === 'table' ? '!border-accent text-accent' : ''}`} onClick={() => setView('table')}>Table</button>
+          <button type="button" className={`btn-outline !text-xs ${view === 'kanban' ? '!border-accent text-accent' : ''}`} onClick={() => setView('kanban')}>Kanban</button>
+          <button type="button" className="btn-primary" onClick={() => setShowJobcard(true)}>+ New job card</button>
+        </div>} />
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        {[['Open', metrics?.open], ['Urgent', metrics?.urgent], ['Resolved', metrics?.resolved],
-          ['Hours', metrics?.total_time_hours], ['Avg resolve h', metrics?.avg_resolution_hours ?? '—'], ['Rate', `R${hourlyRate}`]
-        ].map(([label, val]) => (
-          <div key={label} className="card p-3">
-            <div className="text-[10px] uppercase text-slate-500">{label}</div>
-            <div className="text-lg font-extrabold tabular-nums">{val ?? '—'}</div>
-          </div>
+        {[['Open', metrics?.open], ['Urgent', metrics?.urgent], ['SLA breach', metrics?.sla_breached], ['Warranty', metrics?.warranty_open], ['Hours', metrics?.total_time_hours], ['Resolved', metrics?.resolved]].map(([label, val]) => (
+          <div key={label} className="card p-3"><div className="text-[10px] uppercase text-slate-500">{label}</div><div className="text-lg font-extrabold tabular-nums">{val ?? '—'}</div></div>
         ))}
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <input className="input max-w-xs" placeholder="Search…" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && loadList()} />
-        <select className="input max-w-[140px]" value={filter.status} onChange={(e) => setFilter({ ...filter, status: e.target.value })}>
-          <option value="">All statuses</option>
-          {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="input max-w-[120px]" value={filter.priority} onChange={(e) => setFilter({ ...filter, priority: e.target.value })}>
-          <option value="">All priority</option>
-          {PRIOS.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="input max-w-[120px]" value={filter.category} onChange={(e) => setFilter({ ...filter, category: e.target.value })}>
-          <option value="">All categories</option>
-          {CATS.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <input className="input max-w-xs" placeholder="Search…" value={filter.q || ''} onChange={(e) => setFilter({ ...filter, q: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && loadList()} />
+        <select className="input max-w-[130px]" value={filter.status || ''} onChange={(e) => setFilter({ ...filter, status: e.target.value })}><option value="">All statuses</option>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+        <select className="input max-w-[110px]" value={filter.priority || ''} onChange={(e) => setFilter({ ...filter, priority: e.target.value })}><option value="">Priority</option>{PRIOS.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+        <select className="input max-w-[120px]" value={filter.category || ''} onChange={(e) => setFilter({ ...filter, category: e.target.value })}><option value="">Category</option>{CATS.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+        <select className="input max-w-[140px]" value={filter.assignee_id || ''} onChange={(e) => setFilter({ ...filter, assignee_id: e.target.value })}><option value="">All techs</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+        <select className="input max-w-[110px]" value={filter.warranty || ''} onChange={(e) => setFilter({ ...filter, warranty: e.target.value })}><option value="">Warranty</option><option value="1">Warranty only</option></select>
         <button type="button" className="btn-outline" onClick={loadList}>Refresh</button>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-[1fr_minmax(300px,400px)]">
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur text-left text-[10px] uppercase text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Job</th>
-                  <th className="px-2 py-2">Client</th>
-                  <th className="px-2 py-2">Status</th>
-                  <th className="px-2 py-2">Prio</th>
-                  <th className="px-2 py-2">Time</th>
-                  <th className="px-2 py-2">Due</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((t) => (
-                  <tr key={t.id} onClick={() => openTicket(t.id)}
-                    className={`cursor-pointer border-t border-slate-100 dark:border-slate-800 hover:bg-accent/5 ${selected === t.id ? 'bg-accent/10' : ''}`}>
-                    <td className="px-3 py-2.5">
-                      <div className="font-semibold">{t.title}</div>
-                      <div className="text-[10px] text-slate-500">{t.category || '—'}{t.timer_started_at && <span className="ml-1 text-accent animate-pulse">● live</span>}</div>
-                    </td>
-                    <td className="px-2 py-2 text-xs">{t.client_name || '—'}</td>
-                    <td className="px-2 py-2 text-xs capitalize">{t.status?.replace('_', ' ')}</td>
-                    <td className={`px-2 py-2 text-xs font-semibold capitalize ${prioColor(t.priority)}`}>{t.priority}</td>
-                    <td className="px-2 py-2 text-xs tabular-nums">{fmtTime(t.time_spent_seconds)}</td>
-                    <td className="px-2 py-2 text-xs">{t.due_date || '—'}</td>
-                  </tr>
+      {view === 'kanban' ? (
+        <div className="flex gap-2 overflow-x-auto pb-2 min-h-[50vh]">
+          {STATUSES.map((col) => (
+            <div key={col} className="card min-w-[220px] w-[240px] flex-shrink-0 p-2 flex flex-col max-h-[70vh]">
+              <div className="text-[10px] uppercase font-bold text-slate-500 px-1 py-1 capitalize">{col.replace('_', ' ')} <span className="opacity-60">({list.filter((t) => t.status === col).length})</span></div>
+              <div className="overflow-y-auto flex-1 space-y-1.5">
+                {list.filter((t) => t.status === col).map((t) => (
+                  <button key={t.id} type="button" onClick={() => openTicket(t.id)} className={`w-full text-left rounded-lg border border-white/10 bg-black/5 dark:bg-white/5 p-2 text-xs hover:border-accent ${selected === t.id ? 'ring-1 ring-accent' : ''}`}>
+                    <div className="font-semibold">{t.title}</div>
+                    <div className="text-[10px] text-slate-500">{t.client_name || '—'} · {t.assignee_name || 'Unassigned'}</div>
+                    <div className="flex gap-1 mt-1"><span className={`font-semibold capitalize ${prioColor(t.priority)}`}>{t.priority}</span>{t.warranty ? <span className="text-amber-600">W</span> : null}{t.timer_started_at ? <span className="text-accent animate-pulse">●</span> : null}</div>
+                    <div className="mt-1.5 flex flex-wrap gap-0.5">{STATUSES.filter((s) => s !== col).slice(0, 3).map((s) => (
+                      <span key={s} role="button" className="rounded px-1 py-0.5 bg-black/5 dark:bg-white/10 text-[9px] capitalize" onClick={(e) => { e.stopPropagation(); kanbanMove(t.id, s) }}>{s.replace('_', ' ')}</span>
+                    ))}</div>
+                  </button>
                 ))}
-                {!list.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-500">No tickets. Create a job card.</td></tr>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-[1fr_minmax(300px,400px)]">
+          <div className="card overflow-hidden"><div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur text-left text-[10px] uppercase text-slate-500"><tr>
+                <th className="px-3 py-2">Job</th><th className="px-2 py-2">Client</th><th className="px-2 py-2">Tech</th><th className="px-2 py-2">Status</th><th className="px-2 py-2">SLA</th><th className="px-2 py-2">Time</th>
+              </tr></thead>
+              <tbody>
+                {list.map((t) => { const sla = slaLabel(t.sla_due_at); return (
+                  <tr key={t.id} onClick={() => openTicket(t.id)} className={`cursor-pointer border-t border-slate-100 dark:border-slate-800 hover:bg-accent/5 ${selected === t.id ? 'bg-accent/10' : ''}`}>
+                    <td className="px-3 py-2.5"><div className="font-semibold">{t.title}{t.warranty ? ' 🛡' : ''}</div><div className="text-[10px] text-slate-500">{t.category}{t.timer_started_at && <span className="ml-1 text-accent animate-pulse">● live</span>}</div></td>
+                    <td className="px-2 py-2 text-xs">{t.client_name || '—'}</td>
+                    <td className="px-2 py-2 text-xs">{t.assignee_name || '—'}</td>
+                    <td className="px-2 py-2 text-xs capitalize">{t.status?.replace('_', ' ')}</td>
+                    <td className={`px-2 py-2 text-[10px] font-medium ${sla?.cls || ''}`}>{sla?.text || '—'}</td>
+                    <td className="px-2 py-2 text-xs tabular-nums">{fmtTime(t.time_spent_seconds)}</td>
+                  </tr>
+                )})}
+                {!list.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-500">No tickets</td></tr>}
               </tbody>
             </table>
+          </div></div>
+
+          <div className="card p-3 space-y-3 max-h-[70vh] overflow-y-auto">
+            {!detail ? <p className="text-sm text-slate-500 p-4">Select a ticket</p> : (
+              <>
+                <div><h2 className="font-bold">{detail.title}</h2><p className="text-[11px] text-slate-500">{detail.client_name || 'No client'} · {detail.assignee_name || 'Unassigned'}</p></div>
+                <div className="flex flex-wrap gap-1.5 text-[10px]">
+                  {detail.warranty ? <span className="rounded-full bg-amber-500/15 text-amber-700 px-2 py-0.5">Warranty</span> : null}
+                  {(() => { const s = slaLabel(detail.sla_due_at); return s ? <span className={`rounded-full bg-black/5 px-2 py-0.5 ${s.cls}`}>{s.text}</span> : null })()}
+                </div>
+                <div className="rounded-xl border border-accent/20 bg-accent/5 p-3 space-y-2">
+                  <div className="text-2xl font-extrabold tabular-nums">{fmtTime(displaySeconds)}</div>
+                  <div className="text-[11px] text-slate-500">≈ {fmtMoney(billablePreview)} @ {fmtMoney(hourlyRate)}/hr</div>
+                  <div className="flex flex-wrap gap-2">
+                    {!detail.timer_started_at ? <button type="button" className="btn-primary !text-xs" onClick={timerStart}>Start</button> : <button type="button" className="btn-outline !text-xs !border-red-400 !text-red-600" onClick={timerStop}>Stop</button>}
+                    <input className="input !py-1 !w-14 text-xs" type="number" placeholder="min" value={manualMin} onChange={(e) => setManualMin(e.target.value)} />
+                    <button type="button" className="btn-outline !text-xs" onClick={addManual}>Log</button>
+                  </div>
+                  <button type="button" className="btn-primary w-full !text-xs" disabled={busy} onClick={billInvoice}>Bill → invoice</button>
+                  <div className="flex gap-2">
+                    <button type="button" className="btn-outline flex-1 !text-xs" onClick={printJob}>Print job card</button>
+                    <button type="button" className="btn-share flex-1 bg-[#25D366] !text-xs" onClick={whatsappStatus}>WhatsApp</button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="label">Status</label><select className="input" value={detail.status} onChange={(e) => patch({ status: e.target.value })}>{STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}</select></div>
+                  <div><label className="label">Assignee</label><select className="input" value={detail.assignee_id || ''} onChange={(e) => patch({ assignee_id: e.target.value || null })}><option value="">Unassigned</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+                  <div><label className="label">Warranty</label><select className="input" value={detail.warranty ? 1 : 0} onChange={(e) => patch({ warranty: Number(e.target.value) })}><option value={0}>No</option><option value={1}>Yes</option></select></div>
+                  <div><label className="label">SLA hours</label><input className="input" type="number" min="1" placeholder="24" defaultValue={detail.sla_hours || ''} onBlur={(e) => patch({ sla_hours: e.target.value ? Number(e.target.value) : null })} /></div>
+                </div>
+                {detail.description && <pre className="whitespace-pre-wrap text-xs bg-black/5 dark:bg-white/5 rounded-lg p-2">{detail.description}</pre>}
+                <div>
+                  <div className="label">Parts</div>
+                  <ul className="text-xs space-y-1 mb-2">{(detail.parts || []).map((p, i) => <li key={i} className="flex justify-between"><span>{p.name} × {p.qty}</span><span>{fmtMoney(p.qty * p.cost)}</span></li>)}{!detail.parts?.length && <li className="text-slate-500">No parts</li>}</ul>
+                  <div className="flex flex-wrap gap-1">
+                    <input className="input !py-1 text-xs flex-1 min-w-[80px]" placeholder="Part" value={partDraft.name} onChange={(e) => setPartDraft({ ...partDraft, name: e.target.value })} />
+                    <input className="input !py-1 !w-12 text-xs" type="number" value={partDraft.qty} onChange={(e) => setPartDraft({ ...partDraft, qty: e.target.value })} />
+                    <input className="input !py-1 !w-14 text-xs" type="number" value={partDraft.cost} onChange={(e) => setPartDraft({ ...partDraft, cost: e.target.value })} />
+                    <button type="button" className="btn-outline !text-xs" onClick={saveParts}>Add</button>
+                  </div>
+                </div>
+                {detail.linked_invoices?.length > 0 && <div><div className="label">Linked invoices</div><ul className="text-xs">{detail.linked_invoices.map((inv) => <li key={inv.id}>{inv.number} · {fmtMoney(inv.total)} · {inv.status}</li>)}</ul></div>}
+                <div>
+                  <div className="label">Comments</div>
+                  <div className="space-y-1 max-h-24 overflow-y-auto mb-2">{(detail.comments || []).map((c) => <div key={c.id} className="text-xs rounded-lg bg-black/5 p-2"><div className="font-semibold">{c.author_name}</div><div>{c.text}</div></div>)}</div>
+                  <textarea className="input text-xs" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Update…" />
+                  <div className="mt-1 flex gap-2"><label className="flex items-center gap-1 text-[11px]"><input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} /> Internal</label><button type="button" className="btn-outline !text-xs ml-auto" onClick={addComment}>Post</button></div>
+                </div>
+              </>
+            )}
           </div>
         </div>
-
-        <div className="card p-3 space-y-3 max-h-[70vh] overflow-y-auto">
-          {!detail ? (
-            <p className="text-sm text-slate-500 p-4">Select a ticket for timer, comments & billing.</p>
-          ) : (
-            <>
-              <div>
-                <h2 className="font-bold">{detail.title}</h2>
-                <p className="text-[11px] text-slate-500">{detail.client_name || 'No client'} · {detail.category}</p>
-              </div>
-              <div className="rounded-xl border border-accent/20 bg-accent/5 p-3 space-y-2">
-                <div className="flex justify-between text-[10px] uppercase text-slate-500">
-                  <span>Timer</span>
-                  {detail.timer_started_at && <span className="text-accent animate-pulse">● Running</span>}
-                </div>
-                <div className="text-2xl font-extrabold tabular-nums">{fmtTime(displaySeconds)}</div>
-                <div className="text-[11px] text-slate-500">Billable ≈ {fmtMoney(billablePreview)} @ {fmtMoney(hourlyRate)}/hr</div>
-                <div className="flex flex-wrap gap-2">
-                  {!detail.timer_started_at ? (
-                    <button type="button" className="btn-primary !text-xs" onClick={timerStart}>Start timer</button>
-                  ) : (
-                    <button type="button" className="btn-outline !text-xs !border-red-400 !text-red-600" onClick={timerStop}>Stop & log</button>
-                  )}
-                  <input className="input !py-1 !w-16 text-xs" type="number" min="1" placeholder="min" value={manualMin} onChange={(e) => setManualMin(e.target.value)} />
-                  <button type="button" className="btn-outline !text-xs" onClick={addManual}>+ Log</button>
-                </div>
-                <button type="button" className="btn-primary w-full !text-xs" disabled={busy} onClick={billInvoice}>Bill hours → invoice</button>
-              </div>
-              <div>
-                <label className="label">Status</label>
-                <select className="input" value={detail.status} onChange={(e) => patchStatus(e.target.value)}>
-                  {STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
-                </select>
-              </div>
-              {detail.description && (
-                <pre className="whitespace-pre-wrap text-xs bg-black/5 dark:bg-white/5 rounded-lg p-2">{detail.description}</pre>
-              )}
-              {detail.time_entries?.length > 0 && (
-                <ul className="text-xs space-y-1 max-h-24 overflow-y-auto">
-                  {detail.time_entries.map((e) => (
-                    <li key={e.id} className="flex justify-between"><span>{e.user_name}</span><span className="tabular-nums">{fmtTime(e.seconds)}</span></li>
-                  ))}
-                </ul>
-              )}
-              <div>
-                <div className="label">Comments</div>
-                <div className="space-y-1 max-h-28 overflow-y-auto mb-2">
-                  {(detail.comments || []).map((c) => (
-                    <div key={c.id} className="text-xs rounded-lg bg-black/5 dark:bg-white/5 p-2">
-                      <div className="font-semibold">{c.author_name}{c.internal ? ' · internal' : ''}</div>
-                      <div>{c.text}</div>
-                    </div>
-                  ))}
-                </div>
-                <textarea className="input text-xs" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add update…" />
-                <div className="mt-1 flex items-center gap-2">
-                  <label className="flex items-center gap-1 text-[11px]"><input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} /> Internal</label>
-                  <button type="button" className="btn-outline !text-xs ml-auto" onClick={addComment}>Post</button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+      )}
 
       {showJobcard && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-3">
-          <form onSubmit={createJobcard} className="card glass-panel w-full max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6 space-y-3">
-            <div className="flex justify-between items-center">
-              <h2 className="text-lg font-extrabold">New job card</h2>
-              <button type="button" className="btn-ghost !px-2" onClick={() => setShowJobcard(false)}>✕</button>
-            </div>
-            <div>
-              <label className="label">Job title *</label>
-              <input className="input" required value={job.title} onChange={(e) => setJ('title', e.target.value)} placeholder="Laptop screen replacement" />
-            </div>
+          <form onSubmit={createJobcard} className="card glass-panel w-full max-w-lg max-h-[90vh] overflow-y-auto p-4 space-y-3">
+            <div className="flex justify-between"><h2 className="text-lg font-extrabold">New job card</h2><button type="button" className="btn-ghost !px-2" onClick={() => setShowJobcard(false)}>✕</button></div>
+            <div><label className="label">Job title *</label><input className="input" required value={job.title} onChange={(e) => setJ('title', e.target.value)} /></div>
             <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="label">Client</label>
-                <select className="input" value={job.client_id} onChange={(e) => setJ('client_id', e.target.value)}>
-                  <option value="">— Select —</option>
-                  {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Category</label>
-                <select className="input" value={job.category} onChange={(e) => setJ('category', e.target.value)}>
-                  {CATS.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Priority</label>
-                <select className="input" value={job.priority} onChange={(e) => setJ('priority', e.target.value)}>
-                  {PRIOS.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Due date</label>
-                <input className="input" type="date" value={job.due_date} onChange={(e) => setJ('due_date', e.target.value)} />
-              </div>
+              <div><label className="label">Client</label><select className="input" value={job.client_id} onChange={(e) => setJ('client_id', e.target.value)}><option value="">—</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+              <div><label className="label">Assignee</label><select className="input" value={job.assignee_id} onChange={(e) => setJ('assignee_id', e.target.value)}><option value="">—</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+              <div><label className="label">Category</label><select className="input" value={job.category} onChange={(e) => setJ('category', e.target.value)}>{CATS.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+              <div><label className="label">Priority</label><select className="input" value={job.priority} onChange={(e) => setJ('priority', e.target.value)}>{PRIOS.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+              <div><label className="label">SLA hours</label><input className="input" type="number" min="1" value={job.sla_hours} onChange={(e) => setJ('sla_hours', e.target.value)} placeholder="24" /></div>
+              <div><label className="label">Warranty</label><select className="input" value={job.warranty} onChange={(e) => setJ('warranty', Number(e.target.value))}><option value={0}>No</option><option value={1}>Yes</option></select></div>
             </div>
-            <div>
-              <label className="label">Fault reported</label>
-              <input className="input" value={job.fault_reported} onChange={(e) => setJ('fault_reported', e.target.value)} />
-            </div>
+            <div><label className="label">Fault</label><input className="input" value={job.fault_reported} onChange={(e) => setJ('fault_reported', e.target.value)} /></div>
             <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="label">Device</label>
-                <input className="input" value={job.device_info} onChange={(e) => setJ('device_info', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Serials</label>
-                <input className="input" value={job.serial_numbers} onChange={(e) => setJ('serial_numbers', e.target.value)} />
-              </div>
+              <div><label className="label">Device</label><input className="input" value={job.device_info} onChange={(e) => setJ('device_info', e.target.value)} /></div>
+              <div><label className="label">Serials</label><input className="input" value={job.serial_numbers} onChange={(e) => setJ('serial_numbers', e.target.value)} /></div>
             </div>
-            <div>
-              <label className="label">Site address</label>
-              <input className="input" value={job.site_address} onChange={(e) => setJ('site_address', e.target.value)} />
+            <div><label className="label">Parts</label>
+              <div className="flex flex-wrap gap-1 mb-1">{(job.parts || []).map((p, i) => <span key={i} className="rounded-full bg-black/5 px-2 py-0.5 text-[10px]">{p.name} ×{p.qty}</span>)}</div>
+              <div className="flex gap-1"><input className="input !py-1 text-xs flex-1" placeholder="Part" value={partDraft.name} onChange={(e) => setPartDraft({ ...partDraft, name: e.target.value })} /><button type="button" className="btn-outline !text-xs" onClick={addPartToJob}>Add</button></div>
             </div>
-            <div>
-              <label className="label">Description</label>
-              <textarea className="input" rows={2} value={job.description} onChange={(e) => setJ('description', e.target.value)} />
-            </div>
-            <div className="flex gap-2">
-              <button type="button" className="btn-outline flex-1" onClick={() => setShowJobcard(false)}>Cancel</button>
-              <button type="submit" className="btn-primary flex-1" disabled={busy}>{busy ? 'Saving…' : 'Create job card'}</button>
-            </div>
+            <div><label className="label">Description</label><textarea className="input" rows={2} value={job.description} onChange={(e) => setJ('description', e.target.value)} /></div>
+            <div className="flex gap-2"><button type="button" className="btn-outline flex-1" onClick={() => setShowJobcard(false)}>Cancel</button><button type="submit" className="btn-primary flex-1" disabled={busy}>{busy ? 'Saving…' : 'Create'}</button></div>
           </form>
         </div>
       )}
