@@ -3,16 +3,15 @@ import fs from 'fs'
 import path from 'path'
 import bcrypt from 'bcryptjs'
 import { fileURLToPath } from 'url'
+import { TEMPLATE_SEED } from './seedTemplates.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// SAFE PATH RESOLUTION: If Render sets a forbidden root path, we fallback to a safe local project path
 let dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../data/said.db')
 if (dbPath.startsWith('/var/data')) {
   dbPath = path.join(process.cwd(), 'data/said.db')
 }
 
-// Safely create the folder inside the project directory
 fs.mkdirSync(path.dirname(dbPath), { recursive: true })
 
 export const db = new Database(dbPath)
@@ -32,13 +31,24 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS company (
   id TEXT PRIMARY KEY DEFAULT 'main',
   name TEXT, email TEXT, phone TEXT, vat_number TEXT, address TEXT,
-  bank_name TEXT, account_number TEXT, branch_code TEXT
+  bank_name TEXT, account_number TEXT, branch_code TEXT,
+  logo_url TEXT, website TEXT, invoice_prefix TEXT DEFAULT 'INV',
+  default_vat_rate REAL DEFAULT 15, currency TEXT DEFAULT 'ZAR',
+  business_type TEXT DEFAULT 'general',
+  invoice_template_id TEXT DEFAULT 'tax_invoice_full',
+  footer_note TEXT, terms_default TEXT
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT, phone TEXT, address TEXT,
+  vat_number TEXT, notes TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -56,6 +66,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   exclusive REAL DEFAULT 0, vat_amount REAL DEFAULT 0, total REAL DEFAULT 0,
   amount_paid REAL DEFAULT 0,
   reminder_at TEXT,
+  template_id TEXT,
   created_by TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT
@@ -82,12 +93,18 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
+  description TEXT,
   status TEXT NOT NULL DEFAULT 'open',
   priority TEXT NOT NULL DEFAULT 'normal',
   category TEXT,
+  tags TEXT,
   client_id TEXT,
   assignee_id TEXT,
   notes TEXT,
+  due_date TEXT,
+  time_spent_seconds INTEGER NOT NULL DEFAULT 0,
+  timer_started_at TEXT,
+  estimated_minutes INTEGER,
   created_by TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT,
@@ -101,13 +118,31 @@ CREATE TABLE IF NOT EXISTS ticket_comments (
   author_name TEXT,
   text TEXT NOT NULL,
   internal INTEGER NOT NULL DEFAULT 0,
+  time_logged_seconds INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ticket_time_entries (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  user_id TEXT,
+  user_name TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
   created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS document_templates (
   id TEXT PRIMARY KEY,
   label TEXT NOT NULL,
-  html TEXT NOT NULL
+  category TEXT DEFAULT 'General',
+  business_types TEXT DEFAULT 'all',
+  description TEXT,
+  html TEXT NOT NULL,
+  is_system INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS document_renders (
@@ -119,66 +154,69 @@ CREATE TABLE IF NOT EXISTS document_renders (
 );
 `)
 
-export function uid() {
-  return crypto.randomUUID()
+const ticketCols = db.prepare(`PRAGMA table_info(tickets)`).all().map((c) => c.name)
+if (!ticketCols.includes('description')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN description TEXT`) } catch {} }
+if (!ticketCols.includes('tags')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN tags TEXT`) } catch {} }
+if (!ticketCols.includes('due_date')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN due_date TEXT`) } catch {} }
+if (!ticketCols.includes('time_spent_seconds')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN time_spent_seconds INTEGER NOT NULL DEFAULT 0`) } catch {} }
+if (!ticketCols.includes('timer_started_at')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN timer_started_at TEXT`) } catch {} }
+if (!ticketCols.includes('estimated_minutes')) { try { db.exec(`ALTER TABLE tickets ADD COLUMN estimated_minutes INTEGER`) } catch {} }
+
+const companyCols = db.prepare(`PRAGMA table_info(company)`).all().map((c) => c.name)
+for (const [col, def] of [
+  ['logo_url', 'TEXT'], ['website', 'TEXT'], ['invoice_prefix', "TEXT DEFAULT 'INV'"],
+  ['default_vat_rate', 'REAL DEFAULT 15'], ['currency', "TEXT DEFAULT 'ZAR'"],
+  ['business_type', "TEXT DEFAULT 'general'"], ['invoice_template_id', "TEXT DEFAULT 'tax_invoice_full'"],
+  ['footer_note', 'TEXT'], ['terms_default', 'TEXT'],
+]) {
+  if (!companyCols.includes(col)) { try { db.exec(`ALTER TABLE company ADD COLUMN ${col} ${def}`) } catch {} }
 }
 
-export function now() {
-  return new Date().toISOString()
+const tplCols = db.prepare(`PRAGMA table_info(document_templates)`).all().map((c) => c.name)
+for (const [col, def] of [
+  ['category', "TEXT DEFAULT 'General'"], ['business_types', "TEXT DEFAULT 'all'"],
+  ['description', 'TEXT'], ['is_system', 'INTEGER NOT NULL DEFAULT 1'], ['updated_at', 'TEXT'],
+]) {
+  if (!tplCols.includes(col)) { try { db.exec(`ALTER TABLE document_templates ADD COLUMN ${col} ${def}`) } catch {} }
 }
+
+const invCols = db.prepare(`PRAGMA table_info(invoices)`).all().map((c) => c.name)
+if (!invCols.includes('template_id')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN template_id TEXT`) } catch {} }
+
+const clientCols = db.prepare(`PRAGMA table_info(clients)`).all().map((c) => c.name)
+if (!clientCols.includes('vat_number')) { try { db.exec(`ALTER TABLE clients ADD COLUMN vat_number TEXT`) } catch {} }
+if (!clientCols.includes('notes')) { try { db.exec(`ALTER TABLE clients ADD COLUMN notes TEXT`) } catch {} }
+
+export function uid() { return crypto.randomUUID() }
+export function now() { return new Date().toISOString() }
 
 export function seedIfEmpty() {
   const n = db.prepare('SELECT COUNT(*) AS c FROM users').get().c
-  if (n > 0) return
+  if (n === 0) {
+    const adminId = uid()
+    const hash = bcrypt.hashSync('admin123', 10)
+    db.prepare(`INSERT INTO users (id, email, name, password_hash, role, created_at) VALUES (?,?,?,?,?,?)`).run(adminId, 'admin@said.local', 'SAID Admin', hash, 'owner', now())
+    db.prepare(`INSERT OR IGNORE INTO company (id, name, email, phone, vat_number, address, bank_name, account_number, branch_code, business_type) VALUES ('main', 'SA Invoice Desk', 'billing@said.local', '011 000 0000', '4XXXXXXXXX', 'Johannesburg, South Africa', 'FNB', '62800000000', '250655', 'pc_repair')`).run()
+  }
 
-  const adminId = uid()
-  const hash = bcrypt.hashSync('admin123', 10)
-  db.prepare(
-    `INSERT INTO users (id, email, name, password_hash, role, created_at) VALUES (?,?,?,?,?,?)`
-  ).run(adminId, 'admin@said.local', 'SAID Admin', hash, 'owner', now())
+  const existing = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
+  if (existing < 50) {
+    const ins = db.prepare(`INSERT OR REPLACE INTO document_templates (id, label, category, business_types, description, html, is_system, updated_at) VALUES (?,?,?,?,?,?,1,?)`)
+    const ts = now()
+    const tx = db.transaction(() => {
+      for (const t of TEMPLATE_SEED) {
+        ins.run(t.id, t.label, t.category, t.business_types, t.description, t.html, ts)
+      }
+    })
+    tx()
+  }
 
-  db.prepare(
-    `INSERT OR IGNORE INTO company (id, name, email, phone, vat_number, address, bank_name, account_number, branch_code)
-     VALUES ('main', 'SA Invoice Desk', 'billing@said.local', '011 000 0000', '4XXXXXXXXX', 'Johannesburg, South Africa', 'FNB', '62800000000', '250655')`
-  ).run()
-
-  const templates = [
-    {
-      id: 'invoice_cover',
-      label: 'Tax invoice cover',
-      html: `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-        body{font-family:system-ui,sans-serif;color:#0f172a;padding:40px;max-width:800px;margin:0 auto}
-        .brand{color:#007A4D;font-weight:800;letter-spacing:.08em;font-size:12px}
-        h1{margin:.4rem 0 1rem;font-size:28px}
-        .box{border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin:12px 0}
-        .muted{color:#64748b;font-size:13px}
-        .total{font-size:22px;font-weight:800;color:#007A4D}
-      </style></head><body>
-        <div class="brand">SA INVOICE DESK</div>
-        <h1>Tax invoice — {{client_name}}</h1>
-        <div class="box"><div class="muted">Company</div><strong>{{company_name}}</strong><br>{{company_address}}</div>
-        <div class="box"><div class="muted">Amount due</div><div class="total">R {{amount_due}}</div>
-        <p class="muted">Invoice {{invoice_number}} · Due {{due_date}}</p></div>
-        <p class="muted">{{payment_note}}</p>
-      </body></html>`,
-    },
-    {
-      id: 'job_card',
-      label: 'Job card',
-      html: `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-        body{font-family:system-ui,sans-serif;padding:32px}
-        h1{color:#007A4D} .row{margin:8px 0;border-bottom:1px solid #e2e8f0;padding-bottom:6px}
-      </style></head><body>
-        <h1>Job card</h1>
-        <div class="row"><strong>Client:</strong> {{client_name}}</div>
-        <div class="row"><strong>Site:</strong> {{site_address}}</div>
-        <div class="row"><strong>Technician:</strong> {{technician}}</div>
-        <div class="row"><strong>Devices:</strong> {{devices}}</div>
-        <div class="row"><strong>Work:</strong> {{service_type}}</div>
-        <p>{{notes}}</p>
-      </body></html>`,
-    },
-  ]
-  const ins = db.prepare('INSERT INTO document_templates (id, label, html) VALUES (?,?,?)')
-  for (const t of templates) ins.run(t.id, t.label, t.html)
+  const set = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)')
+  set.run('theme', 'system')
+  set.run('ticket_auto_timer', '0')
+  set.run('default_priority', 'normal')
+  set.run('business_types_enabled', JSON.stringify([
+    'general', 'pc_repair', 'it', 'msp', 'construction', 'plumbing', 'electrical',
+    'consulting', 'retail', 'hospitality', 'medical', 'automotive', 'property', 'education',
+  ]))
 }
