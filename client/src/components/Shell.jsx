@@ -5,11 +5,12 @@ import AppLogo from './AppLogo'
 import HelpPanel from './HelpPanel'
 
 const links = [
-  { to: '/', label: 'Home', end: true },
+  { to: '/', label: 'Dashboard', end: true },
   { to: '/invoices', label: 'Invoices' },
   { to: '/tickets', label: 'Tickets' },
   { to: '/clients', label: 'Clients' },
   { to: '/documents', label: 'Documents' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 export default function Shell() {
@@ -29,7 +30,7 @@ export default function Shell() {
           <AppLogo size={40} />
           <div className="min-w-0">
             <div className="truncate text-sm font-bold">SAID</div>
-            <div className="text-[11px] text-slate-500">v1.0.0</div>
+            <div className="text-[11px] text-slate-500">v1.1.0</div>
           </div>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5">
@@ -65,7 +66,7 @@ export default function Shell() {
           </button>
         </div>
       </aside>
-      <main className="flex-1 p-6 max-w-6xl">
+      <main className="flex-1 p-6 max-w-7xl">
         <Outlet />
       </main>
       <HelpPanel />

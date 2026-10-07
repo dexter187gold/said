@@ -10,6 +10,8 @@ import InvoiceEdit from './pages/InvoiceEdit'
 import Tickets from './pages/Tickets'
 import Clients from './pages/Clients'
 import Documents from './pages/Documents'
+import Settings from './pages/Settings'
+import TemplateDesigner from './pages/TemplateDesigner'
 
 function Guard({ children }) {
   const { user, ready } = useAuth()
@@ -44,6 +46,9 @@ export default function App() {
                 <Route path="/tickets" element={<Tickets />} />
                 <Route path="/clients" element={<Clients />} />
                 <Route path="/documents" element={<Documents />} />
+                <Route path="/documents/designer" element={<TemplateDesigner />} />
+                <Route path="/documents/designer/:id" element={<TemplateDesigner />} />
+                <Route path="/settings" element={<Settings />} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
