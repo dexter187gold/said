@@ -16,7 +16,14 @@ export async function api(path, { method = 'GET', body, raw } = {}) {
   })
   if (raw) return res
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.message || res.statusText || 'Request failed')
+  if (!res.ok) {
+    const err = new Error(data.message || res.statusText || 'Request failed')
+    err.status = res.status
+    err.code = data.code
+    err.data = data.data
+    err.issues = data.issues
+    throw err
+  }
   return data
 }
 
