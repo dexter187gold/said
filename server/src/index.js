@@ -16,11 +16,21 @@ import { requireAuth } from './middleware/auth.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 seedIfEmpty()
-applyQ2Migrations(db)
+try { applyQ2Migrations(db) } catch (e) { console.warn('Q2 migrations', e.message) }
 
 const app = express()
 app.use(cors({ origin: true, credentials: true }))
 app.use(express.json({ limit: '8mb' }))
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains')
+  }
+  next()
+})
 
 app.get('/api/v1/health', (_req, res) => {
   const tplCount = db.prepare('SELECT COUNT(*) AS c FROM document_templates').get().c
