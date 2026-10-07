@@ -11,6 +11,7 @@ const links = [
   { to: '/quotes', label: 'Quotes', icon: '◇' },
   { to: '/credits', label: 'Credit notes', icon: '↺' },
   { to: '/tickets', label: 'Tickets', icon: '◉' },
+  { to: '/ageing', label: 'Ageing', icon: '▦' },
   { to: '/clients', label: 'Clients', icon: '◎' },
   { to: '/documents', label: 'Doc generator', icon: '▤' },
   { to: '/settings', label: 'Settings', icon: '⚙' },
@@ -117,7 +118,7 @@ export default function Shell() {
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-bold tracking-tight">SAID</div>
-              <div className="text-[10px] text-slate-500">v1.3 · glass UI</div>
+              <div className="text-[10px] text-slate-500">v1.5 · Q2</div>
             </div>
           )}
           <button type="button" className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:text-accent hover:bg-black/5" onClick={() => persist(!collapsed)}>{collapsed ? '›' : '‹'}</button>
@@ -133,7 +134,7 @@ export default function Shell() {
       <div className="flex min-w-0 flex-1 flex-col max-h-dvh">
         <header className="sticky top-0 z-30 flex items-center gap-3 glass-panel border-b border-white/20 dark:border-white/10 px-3 py-2 md:px-5 shrink-0 rounded-none">
           <button type="button" className="md:hidden btn-ghost !px-2.5 !py-1.5 text-lg" onClick={() => setMobileOpen(true)}>☰</button>
-          <div className="min-w-0 flex-1 text-xs text-slate-500 truncate">{user?.name || 'User'} · {new Date().toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' })}<span className="hidden sm:inline opacity-60"> · swipe · double-tap glass · [ ] menu</span></div>
+          <div className="min-w-0 flex-1 text-xs text-slate-500 truncate">{user?.name || 'User'} · {new Date().toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
           <button type="button" className="hidden sm:inline-flex btn-outline !py-1 !px-2.5 !text-xs" onClick={() => persist(!collapsed)}>{collapsed ? 'Show menu' : 'Hide menu'}</button>
         </header>
         <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-full">
@@ -142,8 +143,7 @@ export default function Shell() {
           </div>
         </main>
         <footer className="shrink-0 border-t border-white/10 px-4 py-2 text-[10px] text-slate-400 flex flex-wrap gap-x-3 gap-y-1 glass-panel rounded-none">
-          <span>SAID v1.3</span>
-          <span className="hidden sm:inline">←→ menu · double-tap glass · G · [ ]</span>
+          <span>SAID v1.5</span>
           <NavLink to="/about" className="hover:text-accent">About</NavLink>
           <NavLink to="/settings" className="hover:text-accent">Theme</NavLink>
         </footer>
