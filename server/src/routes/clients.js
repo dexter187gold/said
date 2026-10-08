@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { db, uid, now } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
-import { resolveBranchScope } from '../services/branchScope.js'
+import { resolveBranchScope, assertStaffHasBranch } from '../services/branchScope.js'
 
 export const clientsRouter = Router()
 clientsRouter.use(requireAuth)

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { db, uid, now, audit } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getRateLimitStats, resetRateLimitStats } from '../middleware/rateLimit.js'
+import { verifyWebhookSignature } from '../services/webhooks.js'
 
 export const platformRouter = Router()
 platformRouter.use(requireAuth)
@@ -63,6 +64,8 @@ CREATE TABLE IF NOT EXISTS portal_tokens (
     ['xero_export', 0, 'Xero export'],
     ['offline_drafts', 1, 'PWA offline drafts'],
     ['popia_strict', 1, 'POPIA strict mode flags'],
+    ['branch_required', 0, 'Require branch on staff accounts'],
+    ['webhook_hmac', 1, 'Sign webhooks with HMAC-SHA256 when secret set'],
   ]
   const ins = db.prepare(
     `INSERT OR IGNORE INTO feature_flags (key, enabled, description, updated_at) VALUES (?,?,?,?)`
@@ -454,11 +457,20 @@ platformRouter.post('/webhooks', requireRole('admin'), (req, res, next) => {
       })
       .parse(req.body)
     const id = uid()
+    const secret = body.secret || crypto.randomBytes(24).toString('hex')
     db.prepare(
       `INSERT INTO webhooks (id, url, events, secret, active, created_at) VALUES (?,?,?,?,1,?)`
-    ).run(id, body.url, body.events, body.secret || null, now())
+    ).run(id, body.url, body.events, secret, now())
     audit(req.user.sub, 'webhook.create', body.url, req.ip)
-    res.status(201).json({ data: { id, url: body.url, events: body.events } })
+    res.status(201).json({
+      data: {
+        id,
+        url: body.url,
+        events: body.events,
+        secret,
+        warning: 'Store the secret now — used for X-SAID-Signature: sha256=…',
+      },
+    })
   } catch (e) {
     next(e)
   }
@@ -755,4 +767,14 @@ platformRouter.patch('/clients/:id/branch', requireRole('staff'), (req, res, nex
   } catch (e) {
     next(e)
   }
+})
+
+
+/** Test HMAC verification helper for integrators */
+platformRouter.post('/webhooks/verify-signature', requireRole('admin'), (req, res) => {
+  const body = req.body?.body
+  const secret = req.body?.secret || ''
+  const signature = req.body?.signature || ''
+  const bodyStr = typeof body === 'string' ? body : JSON.stringify(body ?? {})
+  res.json({ data: { valid: verifyWebhookSignature(bodyStr, secret, signature) } })
 })

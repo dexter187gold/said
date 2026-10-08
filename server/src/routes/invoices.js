@@ -4,7 +4,7 @@ import { db, uid, now } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { htmlToPdf } from '../services/pdf.js'
 import { emitWebhook } from '../services/webhooks.js'
-import { resolveBranchScope } from '../services/branchScope.js'
+import { resolveBranchScope, assertStaffHasBranch } from '../services/branchScope.js'
 import { mountInvoiceExtras } from './invoiceExtras.js'
 import {
   getDefaultTemplateId,
@@ -108,6 +108,9 @@ invoicesRouter.get('/:id', (req, res) => {
 
 invoicesRouter.post('/', requireRole('staff'), (req, res, next) => {
   try {
+    const branchErr = assertStaffHasBranch(req)
+    if (branchErr) return next(branchErr)
+
     const body = InvoiceBody.parse(req.body)
     const exclusive = lineExclusive(body.lines)
     const vat_amount = Math.round(exclusive * body.vat_rate * 100) / 100

@@ -440,7 +440,7 @@ export default function Platform() {
 
       {tab === 'webhooks' && isAdmin && (
         <div className="card p-3 space-y-3">
-          <p className="text-xs text-slate-500">Events: invoice.paid, invoice.payment, invoice.created, quote.converted, ticket.closed, ticket.assigned, or *.</p>
+          <p className="text-xs text-slate-500">Events: invoice.paid, invoice.payment, invoice.created, quote.converted, ticket.closed, ticket.assigned, or *. HMAC: header X-SAID-Signature sha256=… when secret is set.</p>
           <div className="flex flex-wrap gap-2">
             <input className="input flex-1 min-w-[180px]" placeholder="https://hooks.example/said" value={hookUrl} onChange={(e) => setHookUrl(e.target.value)} />
             <input className="input flex-1 min-w-[140px]" placeholder="events" value={hookEvents} onChange={(e) => setHookEvents(e.target.value)} />
@@ -449,12 +449,17 @@ export default function Platform() {
               className="btn-primary !text-xs"
               onClick={async () => {
                 try {
-                  await api('/api/v1/platform/webhooks', {
+                  const r = await api('/api/v1/platform/webhooks', {
                     method: 'POST',
                     body: { url: hookUrl, events: hookEvents },
                   })
                   setHookUrl('')
-                  notify('Webhook added')
+                  if (r.data?.secret) {
+                    notify(`Webhook added — secret: ${r.data.secret}`)
+                    try {
+                      await navigator.clipboard.writeText(r.data.secret)
+                    } catch {}
+                  } else notify('Webhook added')
                   load()
                 } catch (e) {
                   notify(e.message, 'error')

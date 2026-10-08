@@ -5,7 +5,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { mountTicketTimers } from './ticketTimers.js'
 import { htmlToPdf } from '../services/pdf.js'
 import { buildJobCardHtml, buildJobCardWhatsApp, saPhoneToWa } from '../services/jobCard.js'
-import { resolveBranchScope } from '../services/branchScope.js'
+import { resolveBranchScope, assertStaffHasBranch } from '../services/branchScope.js'
 import { emitWebhook } from '../services/webhooks.js'
 
 export const ticketsRouter = Router()
@@ -205,6 +205,9 @@ ticketsRouter.get('/:id', (req, res) => {
 
 ticketsRouter.post('/', requireRole('staff'), (req, res, next) => {
   try {
+    const branchErr = assertStaffHasBranch(req)
+    if (branchErr) return next(branchErr)
+
     const body = TicketBody.parse(req.body)
     const id = uid()
     const ts = now()
