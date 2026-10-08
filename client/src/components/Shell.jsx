@@ -6,20 +6,36 @@ import AppLogo from './AppLogo'
 import HelpPanel from './HelpPanel'
 import PageSettingsSidebar, { usePageSettings } from './PageSettingsSidebar'
 
-const links = [
-  { to: '/', label: 'Dashboard', end: true, icon: '⌂' },
-  { to: '/invoices', label: 'Invoices', icon: '◈' },
-  { to: '/quotes', label: 'Quotes', icon: '◇' },
-  { to: '/credits', label: 'Credit notes', icon: '↺' },
-  { to: '/tickets', label: 'Tickets', icon: '◉' },
-  { to: '/ageing', label: 'Ageing', icon: '▦' },
-  { to: '/money', label: 'Money', icon: '◈' },
-  { to: '/clients', label: 'Clients', icon: '◎' },
-  { to: '/documents', label: 'Doc generator', icon: '▤' },
-  { to: '/settings', label: 'Settings', icon: '⚙' },
-  { to: '/platform', label: 'Platform', icon: '⬡' },
-  { to: '/about', label: 'About', icon: 'ⓘ' },
+const navGroups = [
+  {
+    label: 'Work',
+    items: [
+      { to: '/', label: 'Dashboard', end: true, icon: '⌂' },
+      { to: '/tickets', label: 'Tickets', icon: '◉' },
+      { to: '/clients', label: 'Clients', icon: '◎' },
+    ],
+  },
+  {
+    label: 'Billing',
+    items: [
+      { to: '/invoices', label: 'Invoices', icon: '◈' },
+      { to: '/quotes', label: 'Quotes', icon: '◇' },
+      { to: '/credits', label: 'Credit notes', icon: '↺' },
+      { to: '/money', label: 'Money', icon: '₵' },
+      { to: '/ageing', label: 'Ageing', icon: '▦' },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { to: '/documents', label: 'Templates', icon: '▤' },
+      { to: '/settings', label: 'Settings', icon: '⚙' },
+      { to: '/platform', label: 'Platform', icon: '⬡' },
+      { to: '/about', label: 'About', icon: 'ⓘ' },
+    ],
+  },
 ]
+const links = navGroups.flatMap((g) => g.items)
 
 const LS_KEY = 'said_sidebar_collapsed'
 
@@ -97,16 +113,32 @@ export default function Shell() {
 
   const NavItems = ({ compact }) => (
     <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
-      {links.map((l) => (
-        <NavLink key={l.to} to={l.to} end={l.end} title={l.label}
-          className={({ isActive }) =>
-            `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
-              isActive ? 'bg-accent/15 text-accent' : 'text-slate-600 dark:text-slate-300 hover:bg-black/5 dark:hover:bg-white/5'
-            } ${compact ? 'justify-center px-2' : ''}`
-          }>
-          <span className="text-base leading-none w-5 text-center shrink-0 opacity-80">{l.icon}</span>
-          {!compact && <span className="truncate">{l.label}</span>}
-        </NavLink>
+      {(compact ? [{ label: null, items: links }] : navGroups).map((g) => (
+        <div key={g.label || 'all'} className="mb-1">
+          {!compact && g.label && (
+            <div className="px-2.5 pt-2 pb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">
+              {g.label}
+            </div>
+          )}
+          {g.items.map((l) => (
+            <NavLink
+              key={l.to}
+              to={l.to}
+              end={l.end}
+              title={l.label}
+              className={({ isActive }) =>
+                `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                  isActive
+                    ? 'bg-accent/15 text-accent'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-black/5 dark:hover:bg-white/5'
+                } ${compact ? 'justify-center px-2' : ''}`
+              }
+            >
+              <span className="text-base leading-none w-5 text-center shrink-0 opacity-80">{l.icon}</span>
+              {!compact && <span className="truncate">{l.label}</span>}
+            </NavLink>
+          ))}
+        </div>
       ))}
     </nav>
   )
@@ -157,7 +189,7 @@ export default function Shell() {
           </div>
         </main>
         <footer className="shrink-0 border-t border-white/10 px-4 py-2 text-[10px] text-slate-400 flex flex-wrap gap-x-3 gap-y-1 glass-panel rounded-none">
-          <span>SAID v1.8 Q4</span>
+          <span>SAID v2.2</span>
           <NavLink to="/about" className="hover:text-accent">About</NavLink>
           <NavLink to="/settings" className="hover:text-accent">Theme</NavLink>
         </footer>

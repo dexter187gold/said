@@ -4,6 +4,8 @@ import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
 
 const PAGE_MAP = [
+  { match: /^\/$/, key: 'home', label: 'Dashboard Settings' },
+
   { match: /^\/invoices/, key: 'invoice', label: 'Invoice Settings' },
   { match: /^\/quotes/, key: 'quote', label: 'Quote Settings' },
   { match: /^\/credits/, key: 'credit', label: 'Credit Settings' },

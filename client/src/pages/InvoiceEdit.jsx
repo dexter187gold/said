@@ -29,6 +29,8 @@ export default function InvoiceEdit() {
   const [paymentNote, setPaymentNote] = useState('Payment due as stated. EFT / cash / card.')
   const [lines, setLines] = useState([{ description: '', qty: 1, price: 0 }])
   const [snippets, setSnippets] = useState([])
+  const [pricingModel, setPricingModel] = useState('flatrate')
+  const [templateTouched, setTemplateTouched] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('EFT')
   const [loaded, setLoaded] = useState(null)
@@ -36,6 +38,17 @@ export default function InvoiceEdit() {
   const [templates, setTemplates] = useState([])
   const [accountType, setAccountType] = useState('COD Account')
   const [dueDate, setDueDate] = useState('')
+
+  // Auto-pick PDF foundation template from pricing model (user can override)
+  useEffect(() => {
+    if (templateTouched || !isNew) return
+    const map = {
+      hourly: pathType === 'quote' ? 'quote_hourly_cod' : 'invoice_hourly_cod',
+      flatrate: pathType === 'quote' ? 'quote_flatrate_cod' : 'invoice_flatrate_cod',
+      adhoc: pathType === 'quote' ? 'quote_adhoc_cod' : 'invoice_adhoc_cod',
+    }
+    setTemplateId(map[pricingModel] || map.flatrate)
+  }, [pricingModel, pathType, isNew, templateTouched])
 
   useEffect(() => {
     api('/api/v1/documents/line-snippets').then((r) => setSnippets(r.data || [])).catch(() => {})
@@ -74,6 +87,8 @@ export default function InvoiceEdit() {
         setLines(d.lines?.length ? d.lines : [{ description: '', qty: 1, price: 0 }])
         setTemplateId(d.template_id || '')
         setAccountType(d.account_type || 'COD Account')
+        if (d.pricing_model) setPricingModel(d.pricing_model)
+        if (d.template_id) setTemplateTouched(true)
         setDueDate(d.due_date || '')
       })
       .catch((e) => notify(e.message, 'error'))
@@ -90,6 +105,7 @@ export default function InvoiceEdit() {
     doc_type: loaded?.doc_type || pathType,
     template_id: templateId || null,
     account_type: accountType || null,
+    pricing_model: pricingModel || null,
     due_date: dueDate || null,
     status,
     notes,
@@ -212,10 +228,32 @@ export default function InvoiceEdit() {
           </div>
           <div>
             <label className="label">Layout template (layer 1)</label>
-            <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)} aria-label="Layout template">
+            <div className="sm:col-span-2">
+              <label className="label">Pricing model</label>
+              <select
+                className="input"
+                value={pricingModel}
+                onChange={(e) => {
+                  setPricingModel(e.target.value)
+                  setTemplateTouched(false)
+                }}
+                aria-label="Pricing model"
+              >
+                <option value="hourly">Hourly (time & materials — not SLA)</option>
+                <option value="flatrate">Flat rate / package / SLA-style</option>
+                <option value="adhoc">Ad-hoc / rate card</option>
+              </select>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Chooses the matching PDF layout automatically. Override with template below.
+              </p>
+            </div>
+            <select className="input" value={templateId} onChange={(e) => { setTemplateId(e.target.value); setTemplateTouched(true) }} aria-label="Layout template">
               <option value="">Company default</option>
               {pathType === 'quote' && (
                 <>
+                  <option value="invoice_hourly_cod">Invoice · Hourly</option>
+                  <option value="invoice_flatrate_cod">Invoice · Flat rate</option>
+                  <option value="invoice_adhoc_cod">Invoice · Ad-hoc</option>
                   <option value="quote_hourly_cod">Hourly model (COD)</option>
                   <option value="quote_flatrate_cod">Flat rate package (COD)</option>
                   <option value="quote_adhoc_cod">Ad-hoc rate card (COD)</option>

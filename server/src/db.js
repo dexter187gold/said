@@ -172,6 +172,7 @@ for (const [col, def] of [
 
 const invCols = db.prepare(`PRAGMA table_info(invoices)`).all().map((c) => c.name)
 if (!invCols.includes('template_id')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN template_id TEXT`) } catch {} }
+if (!invCols.includes('pricing_model')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN pricing_model TEXT`) } catch {} }
 if (!invCols.includes('doc_type')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'invoice'`) } catch {} }
 if (!invCols.includes('converted_from_id')) { try { db.exec(`ALTER TABLE invoices ADD COLUMN converted_from_id TEXT`) } catch {} }
 
@@ -238,7 +239,7 @@ export function seedIfEmpty() {
   } else {
     // Refresh craft layouts (hourly / flat / ad-hoc quotes + core invoices)
     const critical = TEMPLATE_SEED.filter((t) =>
-      t.id.startsWith('quote_') || t.id === 'tax_invoice_full' || t.id === 'tax_invoice_sa' || t.id === 'job_card' || t.id === 'quotation'
+      t.id.startsWith('quote_') || t.id.startsWith('invoice_') || t.id === 'tax_invoice_full' || t.id === 'tax_invoice_sa' || t.id === 'job_card' || t.id === 'quotation'
     )
     const tx = db.transaction(() => {
       for (const t of critical) insTpl.run(t.id, t.label, t.category, t.business_types, t.description, t.html, tsTpl)

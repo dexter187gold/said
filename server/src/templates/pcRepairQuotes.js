@@ -281,3 +281,28 @@ export const PC_REPAIR_QUOTE_TEMPLATES = [
     ),
   },
 ]
+
+
+/** Invoice layouts — same PDF foundations as quotes (Hourly · Flat · Ad-hoc) */
+function asInvoice(tpl, id, label) {
+  return {
+    ...tpl,
+    id,
+    label,
+    description: tpl.description + ' · invoice',
+    html: String(tpl.html || '')
+      .replace(/QUOTE/g, 'INVOICE')
+      .replace(/Quote/g, 'Invoice')
+      .replace(/>QUOTATION</g, '>TAX INVOICE<'),
+  }
+}
+
+const _q = Object.fromEntries(PC_REPAIR_QUOTE_TEMPLATES.map((t) => [t.id, t]))
+export const PC_REPAIR_INVOICE_TEMPLATES = [
+  asInvoice(_q.quote_hourly_cod, 'invoice_hourly_cod', 'Invoice — Hourly model (COD)'),
+  asInvoice(_q.quote_flatrate_cod, 'invoice_flatrate_cod', 'Invoice — Flat rate package (COD)'),
+  asInvoice(_q.quote_adhoc_cod, 'invoice_adhoc_cod', 'Invoice — Ad-hoc / rate card (COD)'),
+]
+
+// Merge into quote list for seed convenience
+PC_REPAIR_QUOTE_TEMPLATES.push(...PC_REPAIR_INVOICE_TEMPLATES)

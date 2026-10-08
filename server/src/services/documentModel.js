@@ -1,11 +1,7 @@
 /**
- * 3-way document model (SAID)
- *
- * Layer 1 — LAYOUT: HTML template (structure only, {{placeholders}}) — matches PDF designs
- * Layer 2 — COMPANY: name, address, phone, VAT, bank from company table
- * Layer 3 — INSTANCE: this quote/invoice client, lines, dates, status, devices
- *
- * Merge order: layout HTML → company vars → instance vars (instance wins)
+ * Document render (SAID)
+ * PDF-style templates (Hourly · Flat rate · Ad-hoc) + company defaults + document data.
+ * Pricing model picks the layout; user can override template on the form.
  */
 
 import { db } from '../db.js'
@@ -33,18 +29,28 @@ export function getCompanyLayer() {
   }
 }
 
-export function getDefaultTemplateId(docType = 'invoice') {
+export function getDefaultTemplateId(docType = 'invoice', pricingModel = null) {
+  return resolveTemplateForPricing(docType, pricingModel)
+}
+
+/** Map IT billing style → PDF foundation template */
+export function resolveTemplateForPricing(docType = 'invoice', pricingModel = null) {
   const co = db.prepare(`SELECT * FROM company WHERE id = 'main'`).get() || {}
-  if (docType === 'quote') {
-    return co.quote_template_id || 'quote_flatrate_cod'
+  const model = String(pricingModel || '').toLowerCase().replace(/[\s-]/g, '')
+  const isQuote = docType === 'quote'
+  if (model === 'hourly' || model === 'timeandmaterials' || model === 'tm') {
+    return isQuote ? 'quote_hourly_cod' : 'invoice_hourly_cod'
   }
-  if (docType === 'credit') {
-    return co.credit_template_id || 'credit_note'
+  if (model === 'flat' || model === 'flatrate' || model === 'package' || model === 'sla') {
+    return isQuote ? 'quote_flatrate_cod' : 'invoice_flatrate_cod'
   }
-  if (docType === 'ticket' || docType === 'jobcard') {
-    return 'job_card'
+  if (model === 'adhoc' || model === 'ad-hoc' || model === 'cod' || model === 'onceoff') {
+    return isQuote ? 'quote_adhoc_cod' : 'invoice_adhoc_cod'
   }
-  return co.invoice_template_id || 'tax_invoice_sa'
+  if (docType === 'quote') return co.quote_template_id || 'quote_flatrate_cod'
+  if (docType === 'credit') return co.credit_template_id || 'credit_note'
+  if (docType === 'ticket' || docType === 'jobcard') return 'job_card'
+  return co.invoice_template_id || 'invoice_flatrate_cod'
 }
 
 export function loadTemplate(templateId) {
@@ -157,12 +163,13 @@ export function invoiceInstanceVars(inv, client = null) {
   }
 }
 
-export function renderThreeWay({ templateId, instanceVars = {}, fallbackHtml = null }) {
+/** Fill template HTML with company + document fields (no multi-layer API) */
+export function renderDocument({ templateId, instanceVars = {}, fallbackHtml = null }) {
   const company = getCompanyLayer()
   const tpl = templateId ? loadTemplate(templateId) : null
   const baseHtml = (tpl?.html && String(tpl.html).trim()) || fallbackHtml
   if (!baseHtml) {
-    throw new Error('No layout template (layer 1) and no fallback HTML')
+    throw new Error('No document template and no fallback HTML')
   }
   const merged = { ...company }
   for (const [k, v] of Object.entries(instanceVars || {})) {
@@ -176,12 +183,12 @@ export function renderThreeWay({ templateId, instanceVars = {}, fallbackHtml = n
     html: fill(baseHtml, merged),
     template_id: tpl?.id || null,
     template_label: tpl?.label || null,
-    layers: {
-      layout: tpl?.id || 'fallback',
-      company: company.company_name,
-      instance_keys: Object.keys(instanceVars || {}),
-    },
   }
+}
+
+/** @deprecated use renderDocument */
+export function renderThreeWay(opts) {
+  return renderDocument(opts)
 }
 
 export function listLayoutTemplates(category = null) {

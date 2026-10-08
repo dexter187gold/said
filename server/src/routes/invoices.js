@@ -8,8 +8,9 @@ import { resolveBranchScope, assertStaffHasBranch } from '../services/branchScop
 import { mountInvoiceExtras } from './invoiceExtras.js'
 import {
   getDefaultTemplateId,
+  resolveTemplateForPricing,
   invoiceInstanceVars,
-  renderThreeWay,
+  renderDocument,
   buildLinesHtml,
 } from '../services/documentModel.js'
 
@@ -46,6 +47,7 @@ const InvoiceBody = z.object({
   payment_note: z.string().optional().nullable(),
   reminder_at: z.string().optional().nullable(),
   template_id: z.string().optional().nullable(),
+  pricing_model: z.enum(['hourly', 'flatrate', 'adhoc']).optional().nullable(),
   vat_rate: z.coerce.number().default(0.15),
   lines: z.array(Line).min(1),
 })
@@ -118,7 +120,7 @@ invoicesRouter.post('/', requireRole('staff'), (req, res, next) => {
     const id = uid()
     const number = nextNumber(body.doc_type || 'invoice')
     const date = body.date || now().slice(0, 10)
-    const tplId = body.template_id || getDefaultTemplateId(body.doc_type || 'invoice')
+    const tplId = body.template_id || resolveTemplateForPricing(body.doc_type || 'invoice', body.pricing_model)
     db.prepare(`INSERT INTO invoices (
       id, number, client_id, date, due_date, status, notes, account_type, devices, service_type, po_number,
       payment_note, exclusive, vat_amount, total, amount_paid, reminder_at, created_by, created_at, updated_at, doc_type, template_id
@@ -130,6 +132,10 @@ invoicesRouter.post('/', requireRole('staff'), (req, res, next) => {
     )
     const insLine = db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,?)`)
     for (const l of body.lines) insLine.run(uid(), id, l.description, l.qty, l.price, l.discount || 0)
+    if (body.pricing_model) {
+      try { db.prepare(`UPDATE invoices SET pricing_model=? WHERE id=?`).run(body.pricing_model, id) } catch {}
+    }
+    try { db.prepare(`UPDATE invoices SET template_id=? WHERE id=?`).run(tplId, id) } catch {}
     const ub = userBranchId(req.user.sub)
     if (ub) {
       try { db.prepare(`UPDATE invoices SET branch_id=? WHERE id=? AND (branch_id IS NULL OR branch_id='')`).run(ub, id) } catch {}
@@ -224,7 +230,7 @@ td{padding:7px 8px;border-bottom:1px solid #e2e8f0}.right{text-align:right}.cent
 <p class="meta">{{payment_note}}</p>
 <p class="meta">Bank: {{company_bank}} · Acc {{company_account}} · Branch {{company_branch}}</p>
 </body></html>`
-    const { html, layers } = renderThreeWay({
+    const { html, layers } = renderDocument({
       templateId,
       instanceVars: instance,
       fallbackHtml,
@@ -250,7 +256,7 @@ invoicesRouter.get('/:id/html', (req, res, next) => {
     instance.lines_html = buildLinesHtml(inv.lines)
     instance.line_items_html = instance.lines_html
     const fallbackHtml = `<html><body><h1>{{company_name}}</h1><p>{{number}}</p><table>{{lines_html}}</table><p>{{total}}</p></body></html>`
-    const { html } = renderThreeWay({ templateId, instanceVars: instance, fallbackHtml })
+    const { html } = renderDocument({ templateId, instanceVars: instance, fallbackHtml })
     res.type('html').send(html)
   } catch (e) {
     next(e)
@@ -274,7 +280,7 @@ invoicesRouter.post('/preview-layout', requireRole('staff'), (req, res, next) =>
       lines_html: '<tr><td>Sample line</td><td>1</td><td>R 0.00</td><td>R 0.00</td></tr>',
     }
     const fallbackHtml = `<html><body><h1>{{company_name}}</h1><p>{{number}} — {{client_name}}</p><table>{{lines_html}}</table><p>{{total}}</p></body></html>`
-    const result = renderThreeWay({ templateId, instanceVars: instance, fallbackHtml })
+    const result = renderDocument({ templateId, instanceVars: instance, fallbackHtml })
     res.json({ data: result })
   } catch (e) {
     next(e)
