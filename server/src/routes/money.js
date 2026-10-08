@@ -1208,3 +1208,46 @@ export function runDueRetainers(userId = 'cron') {
   return created
 }
 
+
+
+/* ─── Hermes-Metal next: payment receipt ─── */
+moneyRouter.get('/payments/:id/receipt', requireRole('staff'), (req, res) => {
+  const pay = db
+    .prepare(
+      `SELECT p.*, i.number AS invoice_number, i.total AS invoice_total, i.amount_paid,
+              c.name AS client_name, c.email AS client_email, c.phone AS client_phone
+       FROM payments p
+       JOIN invoices i ON i.id = p.invoice_id
+       LEFT JOIN clients c ON c.id = i.client_id
+       WHERE p.id = ?`
+    )
+    .get(req.params.id)
+  if (!pay) return res.status(404).json({ error: true, message: 'Payment not found' })
+  const co = db.prepare(`SELECT * FROM company WHERE id='main'`).get() || {}
+  const lines = [
+    `*Payment receipt*`,
+    `${co.name || 'SAID'}`,
+    ``,
+    `Receipt: ${pay.id.slice(0, 8).toUpperCase()}`,
+    `Date: ${pay.date || (pay.created_at || '').slice(0, 10)}`,
+    `Invoice: ${pay.invoice_number}`,
+    `Client: ${pay.client_name || '—'}`,
+    `Amount: R ${Number(pay.amount).toFixed(2)}`,
+    `Method: ${pay.method || 'EFT'}`,
+    pay.note ? `Note: ${pay.note}` : null,
+    ``,
+    `Invoice total: R ${Number(pay.invoice_total).toFixed(2)}`,
+    `Paid to date: R ${Number(pay.amount_paid).toFixed(2)}`,
+    ``,
+    `Thank you for your payment.`,
+  ].filter((x) => x != null)
+  const text = lines.join('\n')
+  res.json({
+    data: {
+      text,
+      whatsapp_url: `https://wa.me/?text=${encodeURIComponent(text)}`,
+      payment: pay,
+      company: { name: co.name, email: co.email, phone: co.phone },
+    },
+  })
+})

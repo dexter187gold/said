@@ -375,6 +375,39 @@ export default function Tickets() {
             >
               Today board
             </button>
+            <button
+              type="button"
+              className="btn-outline !text-[10px] !py-0.5"
+              onClick={async () => {
+                try {
+                  const r = await api('/api/v1/field/route-maps-url')
+                  if (r.data.url) window.open(r.data.url, '_blank', 'noopener')
+                  else notify(r.data.note || 'No route', 'error')
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Maps route
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-[10px] !py-0.5"
+              onClick={async () => {
+                try {
+                  const r = await api('/api/v1/field/utilisation')
+                  const top = (r.data.techs || [])
+                    .slice(0, 3)
+                    .map((x) => `${x.name}: ${x.open_jobs} open / ${x.time_hours}h`)
+                    .join(' · ')
+                  notify(top || 'No tech data')
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Utilisation
+            </button>
           </div>
         )}
 

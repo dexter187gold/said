@@ -154,3 +154,53 @@ documentsRouter.post('/reseed', requireRole('admin'), (req, res, next) => {
 documentsRouter.get('/categories', (_req, res) => {
   res.json({ data: db.prepare(`SELECT category, COUNT(*) AS count FROM document_templates GROUP BY category ORDER BY category`).all() })
 })
+
+/* ─── Athena-Wood next: line-item snippets library ─── */
+try {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS line_snippets (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  description TEXT NOT NULL,
+  default_qty REAL DEFAULT 1,
+  default_price REAL DEFAULT 0,
+  category TEXT,
+  created_at TEXT NOT NULL
+);
+`)
+} catch (e) {
+  console.warn('line_snippets', e.message)
+}
+
+documentsRouter.get('/line-snippets', (_req, res) => {
+  res.json({
+    data: db.prepare(`SELECT * FROM line_snippets ORDER BY label LIMIT 200`).all(),
+  })
+})
+
+documentsRouter.post('/line-snippets', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        label: z.string().min(1),
+        description: z.string().min(1),
+        default_qty: z.coerce.number().default(1),
+        default_price: z.coerce.number().default(0),
+        category: z.string().optional().nullable(),
+      })
+      .parse(req.body)
+    const id = uid()
+    db.prepare(
+      `INSERT INTO line_snippets (id, label, description, default_qty, default_price, category, created_at)
+       VALUES (?,?,?,?,?,?,?)`
+    ).run(id, body.label, body.description, body.default_qty, body.default_price, body.category || null, now())
+    res.status(201).json({ data: db.prepare(`SELECT * FROM line_snippets WHERE id = ?`).get(id) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+documentsRouter.delete('/line-snippets/:id', requireRole('staff'), (req, res) => {
+  db.prepare(`DELETE FROM line_snippets WHERE id = ?`).run(req.params.id)
+  res.json({ data: { ok: true } })
+})

@@ -817,3 +817,37 @@ platformRouter.get('/webhooks/deliveries', requireRole('admin'), (req, res) => {
   sql += ` ORDER BY d.created_at DESC LIMIT ?`
   res.json({ data: db.prepare(sql).all(limit) })
 })
+
+
+/* ─── Hestia-Earth next: security scorecard + delivery purge ─── */
+platformRouter.get('/security-score', requireRole('admin'), (_req, res) => {
+  const checks = []
+  const flags = Object.fromEntries(
+    db.prepare(`SELECT key, enabled FROM feature_flags`).all().map((r) => [r.key, r.enabled])
+  )
+  const activeKeys = db.prepare(`SELECT COUNT(*) AS c FROM api_keys WHERE revoked=0`).get().c
+  const hooks = db.prepare(`SELECT COUNT(*) AS c FROM webhooks WHERE active=1`).get().c
+  const hooksWithSecret = db.prepare(`SELECT COUNT(*) AS c FROM webhooks WHERE active=1 AND secret IS NOT NULL AND secret != ''`).get().c
+  const staffNoBranch = db.prepare(`SELECT COUNT(*) AS c FROM users WHERE role='staff' AND (branch_id IS NULL OR branch_id='')`).get().c
+  const lastBackup = db.prepare(`SELECT value FROM settings WHERE key='last_backup_at'`).get()?.value
+  const sessions = db.prepare(`SELECT COUNT(*) AS c FROM sessions WHERE revoked_at IS NULL`).get().c
+
+  const add = (id, ok, label, hint) => checks.push({ id, ok: !!ok, label, hint })
+  add('popia', flags.popia_strict === 1, 'POPIA strict flag on', 'Enable popia_strict in Feature flags')
+  add('backup', !!lastBackup, 'Backup taken', 'Download a JSON backup from Platform → Backup')
+  add('webhook_secrets', hooks === 0 || hooksWithSecret === hooks, 'Webhook secrets set', 'Re-create hooks so secrets auto-generate')
+  add('branch_policy', flags.branch_required !== 1 || staffNoBranch === 0, 'Branch policy healthy', 'Assign branches or disable branch_required')
+  add('api_keys', true, `Active API keys: ${activeKeys}`, null)
+  add('sessions', sessions < 50, 'Session count reasonable', 'Revoke stale sessions')
+
+  const score = Math.round((checks.filter((c) => c.ok).length / checks.length) * 100)
+  res.json({ data: { score, checks, last_backup_at: lastBackup || null, at: now() } })
+})
+
+platformRouter.post('/webhooks/deliveries/purge', requireRole('admin'), (req, res) => {
+  const days = Math.min(365, Math.max(1, Number(req.body?.days) || 30))
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString()
+  const r = db.prepare(`DELETE FROM webhook_deliveries WHERE created_at < ?`).run(cutoff)
+  audit(req.user.sub, 'webhook.deliveries_purge', `days=${days}:deleted=${r.changes}`, req.ip)
+  res.json({ data: { deleted: r.changes, older_than_days: days } })
+})

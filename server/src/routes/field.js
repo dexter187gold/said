@@ -1197,3 +1197,60 @@ fieldRouter.get('/tickets/:id/call', (req, res) => {
     },
   })
 })
+
+
+/* ─── Hephaestus-Fire next: Google Maps multi-stop + utilisation ─── */
+fieldRouter.get('/route-maps-url', requireRole('staff'), (req, res) => {
+  const userId = req.query.user_id || req.user.sub
+  const open = db
+    .prepare(
+      `SELECT t.id, t.title,
+         (SELECT lat FROM ticket_checkins WHERE ticket_id=t.id AND lat IS NOT NULL ORDER BY created_at DESC LIMIT 1) AS lat,
+         (SELECT lng FROM ticket_checkins WHERE ticket_id=t.id AND lat IS NOT NULL ORDER BY created_at DESC LIMIT 1) AS lng
+       FROM tickets t
+       WHERE t.assignee_id = ? AND COALESCE(t.is_template,0)=0
+         AND t.status IN ('open','in_progress','waiting')
+       LIMIT 9`
+    )
+    .all(userId)
+  const pts = open.filter((o) => o.lat != null && o.lng != null)
+  if (!pts.length) {
+    return res.json({ data: { url: null, stops: 0, note: 'No GPS on open jobs — arrive on site first' } })
+  }
+  const origin = `${pts[0].lat},${pts[0].lng}`
+  const dest = `${pts[pts.length - 1].lat},${pts[pts.length - 1].lng}`
+  const mid = pts.slice(1, -1)
+  const wp = mid.length ? `&waypoints=${mid.map((p) => `${p.lat},${p.lng}`).join('|')}` : ''
+  const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}${wp}&travelmode=driving`
+  res.json({
+    data: {
+      url,
+      stops: pts.length,
+      titles: pts.map((p) => p.title),
+    },
+  })
+})
+
+fieldRouter.get('/utilisation', requireRole('staff'), (req, res) => {
+  const day = (req.query.date || now().slice(0, 10)).slice(0, 10)
+  const rows = db
+    .prepare(
+      `SELECT u.id, u.name,
+         (SELECT COUNT(*) FROM tickets t WHERE t.assignee_id=u.id AND t.status IN ('open','in_progress','waiting')) AS open_jobs,
+         (SELECT COUNT(*) FROM tickets t WHERE t.assignee_id=u.id AND t.status IN ('resolved','closed') AND t.updated_at LIKE ?) AS closed_today,
+         (SELECT COALESCE(SUM(seconds),0) FROM ticket_time_entries e WHERE e.user_id=u.id AND e.started_at LIKE ?) AS time_seconds
+       FROM users u
+       WHERE u.role IN ('owner','admin','staff')
+       ORDER BY u.name`
+    )
+    .all(`${day}%`, `${day}%`)
+  res.json({
+    data: {
+      date: day,
+      techs: rows.map((r) => ({
+        ...r,
+        time_hours: Math.round((Number(r.time_seconds) / 3600) * 10) / 10,
+      })),
+    },
+  })
+})

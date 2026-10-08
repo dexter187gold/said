@@ -80,3 +80,10 @@ Ship **one big integrated commit** when possible (this cycle’s job-card + PDF 
 - **2026-10-08 Hephaestus-Fire field batch:** GPS check-in/out, camera attachments, signature pad, multi-tech, utilisation, offline queue + SW v16, field API `/api/v1/field`.
 
 - **2026-10-08 Hestia-Earth trust batch:** session revoke, retention policies + purge, JSON backup export, webhooks + test ping, POPIA forget-client, health-detail monitor.
+
+## Next slices batch (2026-10-08)
+
+- **Athena-Wood:** line-item snippets library (save/reuse on invoices/quotes)
+- **Hermes-Metal:** payment receipt WhatsApp text
+- **Hephaestus-Fire:** Google Maps multi-stop route + tech utilisation
+- **Hestia-Earth:** security scorecard + webhook delivery purge

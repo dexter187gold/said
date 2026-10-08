@@ -28,6 +28,7 @@ export default function InvoiceEdit() {
   const [poNumber, setPoNumber] = useState('')
   const [paymentNote, setPaymentNote] = useState('Payment due as stated. EFT / cash / card.')
   const [lines, setLines] = useState([{ description: '', qty: 1, price: 0 }])
+  const [snippets, setSnippets] = useState([])
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('EFT')
   const [loaded, setLoaded] = useState(null)
@@ -36,6 +37,9 @@ export default function InvoiceEdit() {
   const [accountType, setAccountType] = useState('COD Account')
   const [dueDate, setDueDate] = useState('')
 
+  useEffect(() => {
+    api('/api/v1/documents/line-snippets').then((r) => setSnippets(r.data || [])).catch(() => {})
+  }, [])
   useEffect(() => {
     api('/api/v1/clients').then((r) => setClients(r.data)).catch(() => {})
     api('/api/v1/documents/templates').then((r) => setTemplates(r.data || [])).catch(() => {})
@@ -261,6 +265,47 @@ export default function InvoiceEdit() {
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">Line items</h3>
             <button type="button" className="btn-outline !py-1 text-xs" onClick={() => setLines((L) => [...L, { description: '', qty: 1, price: 0 }])}>+ Line</button>
+            {snippets.length > 0 && (
+              <select
+                className="input !w-auto !text-xs !py-1"
+                defaultValue=""
+                onChange={(e) => {
+                  const s = snippets.find((x) => x.id === e.target.value)
+                  if (!s) return
+                  setLines((L) => [...L, { description: s.description, qty: s.default_qty || 1, price: s.default_price || 0 }])
+                  e.target.value = ''
+                }}
+              >
+                <option value="">+ From snippet…</option>
+                {snippets.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              className="btn-ghost !text-[10px]"
+              onClick={async () => {
+                const desc = prompt('Snippet description (saved for reuse)')
+                if (!desc) return
+                const label = prompt('Short label', desc.slice(0, 40)) || desc.slice(0, 40)
+                try {
+                  await api('/api/v1/documents/line-snippets', {
+                    method: 'POST',
+                    body: { label, description: desc, default_qty: 1, default_price: 0 },
+                  })
+                  const r = await api('/api/v1/documents/line-snippets')
+                  setSnippets(r.data || [])
+                  notify('Snippet saved')
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Save snippet
+            </button>
           </div>
           {lines.map((l, i) => (
             <div key={i} className="mb-2 grid gap-2 sm:grid-cols-[1fr_80px_100px_36px]">

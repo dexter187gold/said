@@ -304,6 +304,7 @@ export default function Money() {
                   <th className="px-2 py-2 hidden sm:table-cell">Client</th>
                   <th className="px-2 py-2">Method</th>
                   <th className="px-2 py-2 text-right">Amount</th>
+                  <th className="px-2 py-2 text-right"> </th>
                 </tr>
               </thead>
               <tbody>
@@ -318,6 +319,22 @@ export default function Money() {
                     <td className="px-2 py-2 hidden sm:table-cell truncate max-w-[120px]">{p.client_name}</td>
                     <td className="px-2 py-2 text-xs">{p.method}</td>
                     <td className="px-2 py-2 text-right tabular-nums font-semibold">{fmt(p.amount)}</td>
+                    <td className="px-2 py-2 text-right">
+                      <button
+                        type="button"
+                        className="btn-outline !text-[10px] !py-0.5"
+                        onClick={async () => {
+                          try {
+                            const r = await api(`/api/v1/money/payments/${p.id}/receipt`)
+                            window.open(r.data.whatsapp_url, '_blank', 'noopener')
+                          } catch (e) {
+                            notify(e.message, 'error')
+                          }
+                        }}
+                      >
+                        Receipt WA
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

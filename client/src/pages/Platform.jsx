@@ -25,6 +25,7 @@ export default function Platform() {
   const [rateStats, setRateStats] = useState(null)
   const [userBranches, setUserBranches] = useState([])
   const [deliveries, setDeliveries] = useState([])
+  const [secScore, setSecScore] = useState(null)
 
   const load = () => {
     api('/api/v1/platform/flags').then((r) => setFlags(r.data || [])).catch(() => {})
@@ -38,6 +39,7 @@ export default function Platform() {
       api('/api/v1/platform/health-detail').then((r) => setHealth(r.data)).catch(() => {})
       api('/api/v1/platform/backup/status').then((r) => setBackupStatus(r.data)).catch(() => {})
       api('/api/v1/platform/rate-limits').then((r) => setRateStats(r.data)).catch(() => {})
+      api('/api/v1/platform/security-score').then((r) => setSecScore(r.data)).catch(() => {})
       api('/api/v1/platform/users-branches').then((r) => setUserBranches(r.data || [])).catch(() => {})
     }
     api('/api/v1/platform/branches').then((r) => setBranches(r.data || [])).catch(() => {})
@@ -106,6 +108,7 @@ export default function Platform() {
     { id: 'popia', label: 'POPIA' },
     { id: 'monitor', label: 'Monitor' },
     { id: 'limits', label: 'Rate limits' },
+    { id: 'security', label: 'Security' },
   ]
 
   return (
@@ -665,6 +668,42 @@ export default function Platform() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+
+      {tab === 'security' && isAdmin && (
+        <div className="card p-3 space-y-3">
+          <div className="text-2xl font-bold">
+            Score: {secScore?.score ?? '—'}
+            <span className="text-sm font-normal text-slate-500"> / 100</span>
+          </div>
+          <ul className="text-xs space-y-1">
+            {(secScore?.checks || []).map((c) => (
+              <li key={c.id} className={c.ok ? 'text-emerald-600' : 'text-amber-600'}>
+                {c.ok ? '✓' : '○'} {c.label}
+                {!c.ok && c.hint ? <span className="text-slate-500"> — {c.hint}</span> : null}
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="btn-outline !text-xs"
+            onClick={async () => {
+              if (!confirm('Purge webhook deliveries older than 30 days?')) return
+              try {
+                const r = await api('/api/v1/platform/webhooks/deliveries/purge', {
+                  method: 'POST',
+                  body: { days: 30 },
+                })
+                notify(`Deleted ${r.data.deleted} delivery rows`)
+              } catch (e) {
+                notify(e.message, 'error')
+              }
+            }}
+          >
+            Purge old deliveries (30d)
+          </button>
         </div>
       )}
 
