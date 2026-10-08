@@ -1,3 +1,4 @@
+import { emitWebhook } from '../services/webhooks.js'
 import { db, uid, now } from '../db.js'
 import { requireRole } from '../middleware/auth.js'
 
@@ -57,6 +58,13 @@ export function mountInvoiceExtras(invoicesRouter, { loadInvoice, nextNumber }) 
       const insLine = db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,?)`)
       for (const l of src.lines || []) insLine.run(uid(), id, l.description, l.qty, l.price, l.discount || 0)
       db.prepare(`UPDATE invoices SET status='accepted', updated_at=? WHERE id=?`).run(now(), src.id)
+      emitWebhook('quote.converted', {
+        quote_id: src.id,
+        quote_number: src.number,
+        invoice_id: id,
+        number,
+      }).catch(() => {})
+      emitWebhook('invoice.created', { invoice_id: id, number, from_quote: src.number }).catch(() => {})
       res.status(201).json({ data: loadInvoice(id) })
     } catch (e) { next(e) }
   })

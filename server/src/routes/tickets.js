@@ -5,6 +5,8 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { mountTicketTimers } from './ticketTimers.js'
 import { htmlToPdf } from '../services/pdf.js'
 import { buildJobCardHtml, buildJobCardWhatsApp, saPhoneToWa } from '../services/jobCard.js'
+import { resolveBranchScope } from '../services/branchScope.js'
+import { emitWebhook } from '../services/webhooks.js'
 
 export const ticketsRouter = Router()
 ticketsRouter.use(requireAuth)
@@ -66,6 +68,8 @@ function enrich(row) {
 
 ticketsRouter.get('/', (req, res) => {
   const { status, priority, category, q, assignee_id, warranty, template, branch_id } = req.query
+  const scope = resolveBranchScope(req)
+  const effectiveBranch = scope.scoped ? scope.branchId : (branch_id || null)
   let sql = `SELECT t.*, c.name AS client_name, u.name AS assignee_name
     FROM tickets t
     LEFT JOIN clients c ON c.id = t.client_id
@@ -78,7 +82,7 @@ ticketsRouter.get('/', (req, res) => {
   if (category) { sql += ' AND t.category = ?'; params.push(category) }
   if (assignee_id) { sql += ' AND t.assignee_id = ?'; params.push(assignee_id) }
   if (warranty === '1') sql += ' AND t.warranty = 1'
-  if (branch_id) { sql += ' AND t.branch_id = ?'; params.push(branch_id) }
+  if (effectiveBranch) { sql += ' AND t.branch_id = ?'; params.push(effectiveBranch) }
   if (q) {
     sql += ' AND (t.title LIKE ? OR t.description LIKE ? OR t.notes LIKE ? OR t.tags LIKE ?)'
     const like = `%${q}%`
@@ -253,7 +257,19 @@ ticketsRouter.patch('/:id', requireRole('staff'), (req, res, next) => {
       body.warranty !== undefined ? (body.warranty ? 1 : 0) : (existing.warranty || 0),
       sla_hours, sla_due_at, parts_json, req.params.id
     )
-    res.json({ data: enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id)) })
+    const updated = enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id))
+    if (body.assignee_id !== undefined && body.assignee_id !== existing.assignee_id) {
+      emitWebhook('ticket.assigned', {
+        ticket_id: req.params.id,
+        title: updated?.title,
+        assignee_id: body.assignee_id,
+        previous_assignee_id: existing.assignee_id,
+      }).catch(() => {})
+    }
+    if (body.status && body.status !== existing.status && ['resolved', 'closed'].includes(body.status)) {
+      emitWebhook('ticket.closed', { ticket_id: req.params.id, title: updated?.title, status: body.status }).catch(() => {})
+    }
+    res.json({ data: updated })
   } catch (e) { next(e) }
 })
 

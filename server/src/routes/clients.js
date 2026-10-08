@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { db, uid, now } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
+import { resolveBranchScope } from '../services/branchScope.js'
 
 export const clientsRouter = Router()
 clientsRouter.use(requireAuth)
@@ -23,7 +24,9 @@ function enrich(c) {
 }
 
 clientsRouter.get('/', (req, res) => {
-  const { q, tag } = req.query
+  const { q, tag, branch_id } = req.query
+  const scope = resolveBranchScope(req)
+  const effectiveBranch = scope.scoped ? scope.branchId : (branch_id || null)
   let sql = 'SELECT * FROM clients WHERE 1=1'
   const params = []
   if (q) {
@@ -32,6 +35,7 @@ clientsRouter.get('/', (req, res) => {
     params.push(like, like, like, like)
   }
   if (tag) { sql += ' AND tags LIKE ?'; params.push(`%${tag}%`) }
+  if (effectiveBranch) { sql += ' AND branch_id = ?'; params.push(effectiveBranch) }
   sql += ' ORDER BY name'
   res.json({ data: db.prepare(sql).all(...params).map(enrich) })
 })
@@ -96,6 +100,10 @@ clientsRouter.post('/', requireRole('staff'), (req, res, next) => {
       body.vat_number || null, body.notes || null, body.tags || null, body.credit_limit ?? null,
       body.contacts ? JSON.stringify(body.contacts) : null, body.contract_renewal || null, now()
     )
+    try {
+      const ub = db.prepare(`SELECT branch_id FROM users WHERE id = ?`).get(req.user.sub)?.branch_id
+      if (ub) db.prepare(`UPDATE clients SET branch_id=? WHERE id=? AND branch_id IS NULL`).run(ub, id)
+    } catch {}
     res.status(201).json({ data: enrich(db.prepare('SELECT * FROM clients WHERE id = ?').get(id)) })
   } catch (e) { next(e) }
 })

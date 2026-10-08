@@ -4,6 +4,7 @@ import { db, uid, now } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { htmlToPdf } from '../services/pdf.js'
 import { emitWebhook } from '../services/webhooks.js'
+import { resolveBranchScope } from '../services/branchScope.js'
 import { mountInvoiceExtras } from './invoiceExtras.js'
 import {
   getDefaultTemplateId,
@@ -84,10 +85,12 @@ function lineExclusive(lines) {
 
 invoicesRouter.get('/', (req, res) => {
   const { status, type, branch_id } = req.query
+  const scope = resolveBranchScope(req)
+  const effectiveBranch = scope.scoped ? scope.branchId : (branch_id || null)
   const clauses = []
   const params = []
   if (type) { clauses.push('i.doc_type = ?'); params.push(type) }
-  if (branch_id) { clauses.push('i.branch_id = ?'); params.push(branch_id) }
+  if (effectiveBranch) { clauses.push('i.branch_id = ?'); params.push(effectiveBranch) }
   else { clauses.push("i.doc_type = 'invoice'") }
   if (status) { clauses.push('i.status = ?'); params.push(status) }
   const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''
@@ -128,7 +131,14 @@ invoicesRouter.post('/', requireRole('staff'), (req, res, next) => {
     if (ub) {
       try { db.prepare(`UPDATE invoices SET branch_id=? WHERE id=? AND (branch_id IS NULL OR branch_id='')`).run(ub, id) } catch {}
     }
-    res.status(201).json({ data: loadInvoice(id) })
+    const created = loadInvoice(id)
+    emitWebhook('invoice.created', {
+      invoice_id: id,
+      number: created?.number,
+      doc_type: created?.doc_type,
+      total: created?.total,
+    }).catch(() => {})
+    res.status(201).json({ data: created })
   } catch (e) { next(e) }
 })
 
