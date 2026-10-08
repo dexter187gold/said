@@ -22,6 +22,8 @@ export default function Platform() {
   const [hookUrl, setHookUrl] = useState('')
   const [hookEvents, setHookEvents] = useState('invoice.paid,ticket.closed')
   const [sessions, setSessions] = useState([])
+  const [rateStats, setRateStats] = useState(null)
+  const [userBranches, setUserBranches] = useState([])
 
   const load = () => {
     api('/api/v1/platform/flags').then((r) => setFlags(r.data || [])).catch(() => {})
@@ -33,6 +35,8 @@ export default function Platform() {
       api('/api/v1/platform/webhooks').then((r) => setWebhooks(r.data || [])).catch(() => {})
       api('/api/v1/platform/health-detail').then((r) => setHealth(r.data)).catch(() => {})
       api('/api/v1/platform/backup/status').then((r) => setBackupStatus(r.data)).catch(() => {})
+      api('/api/v1/platform/rate-limits').then((r) => setRateStats(r.data)).catch(() => {})
+      api('/api/v1/platform/users-branches').then((r) => setUserBranches(r.data || [])).catch(() => {})
     }
     api('/api/v1/platform/branches').then((r) => setBranches(r.data || [])).catch(() => {})
     api('/api/v1/platform/sessions').then((r) => setSessions(r.data || [])).catch(() => {})
@@ -99,6 +103,7 @@ export default function Platform() {
     { id: 'webhooks', label: 'Webhooks' },
     { id: 'popia', label: 'POPIA' },
     { id: 'monitor', label: 'Monitor' },
+    { id: 'limits', label: 'Rate limits' },
   ]
 
   return (
@@ -403,6 +408,33 @@ export default function Platform() {
           >
             Download backup JSON
           </button>
+          <div className="border-t border-slate-200 dark:border-slate-700 pt-3 space-y-2">
+            <p className="text-xs text-slate-500">Restore merge: company, settings, clients, branches, flags (safe upsert).</p>
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="text-xs"
+              onChange={async (e) => {
+                const file = e.target.files?.[0]
+                if (!file) return
+                try {
+                  const text = await file.text()
+                  const snapshot = JSON.parse(text)
+                  if (!snapshot.tables) throw new Error('Invalid backup file')
+                  if (!confirm('Merge restore from this backup?')) return
+                  const r = await api('/api/v1/platform/backup/restore', {
+                    method: 'POST',
+                    body: { snapshot, mode: 'merge' },
+                  })
+                  notify(`Restored: ${JSON.stringify(r.data.restored)}`)
+                  load()
+                } catch (err) {
+                  notify(err.message, 'error')
+                }
+                e.target.value = ''
+              }}
+            />
+          </div>
         </div>
       )}
 
@@ -484,6 +516,90 @@ export default function Platform() {
               <li className="text-xs text-slate-500 sm:col-span-2">As of {health.at}</li>
             </ul>
           )}
+        </div>
+      )}
+
+
+      {tab === 'limits' && isAdmin && (
+        <div className="card p-3 space-y-3">
+          <p className="text-xs text-slate-500">In-memory rate limit counters since process start.</p>
+          {rateStats && (
+            <ul className="text-sm space-y-1">
+              <li>Total requests: <strong>{rateStats.total_requests}</strong></li>
+              <li>Limited (429): <strong>{rateStats.limited}</strong></li>
+              <li>Active buckets: <strong>{rateStats.active_buckets}</strong></li>
+            </ul>
+          )}
+          {rateStats?.top_paths?.length > 0 && (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-slate-500">
+                  <th className="py-1">Path</th>
+                  <th className="py-1 text-right">Hits</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rateStats.top_paths.map((p) => (
+                  <tr key={p.path} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="py-1 font-mono truncate max-w-[220px]">{p.path}</td>
+                    <td className="py-1 text-right tabular-nums">{p.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <button
+            type="button"
+            className="btn-outline !text-xs"
+            onClick={async () => {
+              try {
+                await api('/api/v1/platform/rate-limits/reset-stats', { method: 'POST' })
+                const r = await api('/api/v1/platform/rate-limits')
+                setRateStats(r.data)
+                notify('Stats reset')
+              } catch (e) {
+                notify(e.message, 'error')
+              }
+            }}
+          >
+            Reset stats
+          </button>
+        </div>
+      )}
+
+      {tab === 'branches' && isAdmin && userBranches.length > 0 && (
+        <div className="card p-3 space-y-2 mt-3">
+          <h3 className="text-xs font-bold uppercase text-slate-500">Staff branch assignment</h3>
+          <ul className="text-xs space-y-1">
+            {userBranches.map((u) => (
+              <li key={u.id} className="flex flex-wrap items-center gap-2">
+                <span className="min-w-[120px] font-medium">{u.name}</span>
+                <select
+                  className="input !text-[10px] !py-0.5 !w-auto"
+                  value={u.branch_id || ''}
+                  onChange={async (e) => {
+                    try {
+                      await api(`/api/v1/platform/users/${u.id}/branch`, {
+                        method: 'PATCH',
+                        body: { branch_id: e.target.value || null },
+                      })
+                      notify('Branch updated')
+                      load()
+                    } catch (err) {
+                      notify(err.message, 'error')
+                    }
+                  }}
+                >
+                  <option value="">No branch</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

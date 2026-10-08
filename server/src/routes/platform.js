@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { z } from 'zod'
 import { db, uid, now, audit } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
+import { getRateLimitStats, resetRateLimitStats } from '../middleware/rateLimit.js'
 
 export const platformRouter = Router()
 platformRouter.use(requireAuth)
@@ -553,4 +554,205 @@ platformRouter.get('/health-detail', requireRole('admin'), (_req, res) => {
       .get().c,
   }
   res.json({ data: detail })
+})
+
+/* ─── Hestia-Earth slice 2: restore, branch scope, rate-limit stats ─── */
+
+
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN branch_id TEXT`)
+} catch {}
+try {
+  db.exec(`ALTER TABLE clients ADD COLUMN branch_id TEXT`)
+} catch {}
+try {
+  db.exec(`ALTER TABLE tickets ADD COLUMN branch_id TEXT`)
+} catch {}
+try {
+  db.exec(`ALTER TABLE invoices ADD COLUMN branch_id TEXT`)
+} catch {}
+
+platformRouter.get('/rate-limits', requireRole('admin'), (_req, res) => {
+  res.json({ data: getRateLimitStats() })
+})
+
+platformRouter.post('/rate-limits/reset-stats', requireRole('admin'), (req, res) => {
+  resetRateLimitStats()
+  audit(req.user.sub, 'ratelimit.stats_reset', null, req.ip)
+  res.json({ data: { ok: true } })
+})
+
+/**
+ * Restore from backup JSON
+ * mode: merge (default) — upsert company/settings/clients by id
+ * mode: replace_settings — only settings + company
+ * Destructive full replace is not supported (safety)
+ */
+platformRouter.post('/backup/restore', requireRole('admin'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        snapshot: z.object({
+          tables: z.record(z.array(z.any())),
+          exported_at: z.string().optional(),
+        }),
+        mode: z.enum(['merge', 'replace_settings']).default('merge'),
+      })
+      .parse(req.body)
+
+    const tables = body.snapshot.tables || {}
+    const report = { restored: {}, skipped: [] }
+
+    // Always allow company + settings
+    if (tables.company?.length) {
+      const co = tables.company.find((c) => c.id === 'main') || tables.company[0]
+      if (co) {
+        db.prepare(
+          `UPDATE company SET name=?, email=?, phone=?, vat_number=?, address=?, bank_name=?, account_number=?, branch_code=? WHERE id='main'`
+        ).run(
+          co.name || null,
+          co.email || null,
+          co.phone || null,
+          co.vat_number || null,
+          co.address || null,
+          co.bank_name || null,
+          co.account_number || null,
+          co.branch_code || null
+        )
+        report.restored.company = 1
+      }
+    }
+    if (tables.settings?.length) {
+      const upsert = db.prepare(
+        `INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
+      )
+      let n = 0
+      for (const row of tables.settings) {
+        if (row.key != null) {
+          upsert.run(row.key, String(row.value ?? ''))
+          n++
+        }
+      }
+      report.restored.settings = n
+    }
+
+    if (body.mode === 'merge') {
+      if (tables.clients?.length) {
+        const ins = db.prepare(
+          `INSERT INTO clients (id, name, email, phone, address, notes, vat_number, created_at)
+           VALUES (?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=excluded.email, phone=excluded.phone,
+             address=excluded.address, notes=excluded.notes, vat_number=excluded.vat_number`
+        )
+        let n = 0
+        for (const c of tables.clients) {
+          try {
+            ins.run(
+              c.id,
+              c.name || 'Client',
+              c.email || null,
+              c.phone || null,
+              c.address || null,
+              c.notes || null,
+              c.vat_number || null,
+              c.created_at || now()
+            )
+            n++
+          } catch {
+            /* skip bad row */
+          }
+        }
+        report.restored.clients = n
+      }
+      if (tables.branches?.length) {
+        const ins = db.prepare(
+          `INSERT INTO branches (id, name, code, address, phone, active, created_at)
+           VALUES (?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET name=excluded.name, code=excluded.code, address=excluded.address,
+             phone=excluded.phone, active=excluded.active`
+        )
+        let n = 0
+        for (const b of tables.branches) {
+          try {
+            ins.run(b.id, b.name, b.code || null, b.address || null, b.phone || null, b.active ?? 1, b.created_at || now())
+            n++
+          } catch {}
+        }
+        report.restored.branches = n
+      }
+      if (tables.feature_flags?.length) {
+        const ins = db.prepare(
+          `INSERT INTO feature_flags (key, enabled, description, updated_at) VALUES (?,?,?,?)
+           ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, description=excluded.description`
+        )
+        let n = 0
+        for (const f of tables.feature_flags) {
+          try {
+            ins.run(f.key, f.enabled ? 1 : 0, f.description || null, now())
+            n++
+          } catch {}
+        }
+        report.restored.feature_flags = n
+      }
+    } else {
+      report.skipped.push('clients', 'branches', 'invoices', 'tickets')
+    }
+
+    audit(req.user.sub, 'backup.restore', body.mode, req.ip)
+    res.json({ data: report })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Assign user to branch */
+platformRouter.patch('/users/:id/branch', requireRole('admin'), (req, res, next) => {
+  try {
+    const branch_id = z.string().nullable().optional().parse(req.body?.branch_id ?? null)
+    const u = db.prepare(`SELECT id FROM users WHERE id = ?`).get(req.params.id)
+    if (!u) return res.status(404).json({ error: true, message: 'User not found' })
+    if (branch_id) {
+      const b = db.prepare(`SELECT id FROM branches WHERE id = ?`).get(branch_id)
+      if (!b) return res.status(400).json({ error: true, message: 'Branch not found' })
+    }
+    db.prepare(`UPDATE users SET branch_id=? WHERE id=?`).run(branch_id, req.params.id)
+    audit(req.user.sub, 'user.branch', `${req.params.id}:${branch_id || 'none'}`, req.ip)
+    res.json({ data: { user_id: req.params.id, branch_id } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** List users with branch (admin) */
+platformRouter.get('/users-branches', requireRole('admin'), (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT u.id, u.name, u.email, u.role, u.branch_id, b.name AS branch_name
+       FROM users u LEFT JOIN branches b ON b.id = u.branch_id
+       ORDER BY u.name`
+    )
+    .all()
+  res.json({ data: rows })
+})
+
+/** Branch-scoped counts */
+platformRouter.get('/branches/:id/stats', requireRole('staff'), (req, res) => {
+  const id = req.params.id
+  const clients = db.prepare(`SELECT COUNT(*) AS c FROM clients WHERE branch_id = ?`).get(id).c
+  const tickets = db.prepare(`SELECT COUNT(*) AS c FROM tickets WHERE branch_id = ?`).get(id).c
+  const invoices = db.prepare(`SELECT COUNT(*) AS c FROM invoices WHERE branch_id = ?`).get(id).c
+  const staff = db.prepare(`SELECT COUNT(*) AS c FROM users WHERE branch_id = ?`).get(id).c
+  res.json({ data: { branch_id: id, clients, tickets, invoices, staff } })
+})
+
+/** Set branch on a client */
+platformRouter.patch('/clients/:id/branch', requireRole('staff'), (req, res, next) => {
+  try {
+    const branch_id = z.string().nullable().optional().parse(req.body?.branch_id ?? null)
+    const r = db.prepare(`UPDATE clients SET branch_id=? WHERE id=?`).run(branch_id, req.params.id)
+    if (!r.changes) return res.status(404).json({ error: true, message: 'Not found' })
+    res.json({ data: { ok: true, branch_id } })
+  } catch (e) {
+    next(e)
+  }
 })
