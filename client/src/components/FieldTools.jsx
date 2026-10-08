@@ -14,6 +14,8 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
   const [signer, setSigner] = useState('')
   const [busy, setBusy] = useState(false)
   const [travel, setTravel] = useState(null)
+  const [checklist, setChecklist] = useState(null)
+  const [daySum, setDaySum] = useState(null)
   const canvasRef = useRef(null)
   const drawing = useRef(false)
   const fileRef = useRef(null)
@@ -21,16 +23,18 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
   const load = async () => {
     if (!ticketId) return
     try {
-      const [c, a, s, t] = await Promise.all([
+      const [c, a, s, tech, cl] = await Promise.all([
         api(`/api/v1/field/tickets/${ticketId}/checkins`),
         api(`/api/v1/field/tickets/${ticketId}/attachments`),
         api(`/api/v1/field/tickets/${ticketId}/signatures`),
         api(`/api/v1/field/tickets/${ticketId}/techs`),
+        api(`/api/v1/field/tickets/${ticketId}/close-checklist`),
       ])
       setCheckins(c.data || [])
       setAttachments(a.data || [])
       setSignatures(s.data || [])
-      setTechs(t.data || [])
+      setTechs(tech.data || [])
+      setChecklist(cl.data || null)
     } catch (e) {
       /* optional panel */
     }
@@ -270,6 +274,43 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
         >
           Enable alerts
         </button>
+        <button
+          type="button"
+          className="btn-outline !text-xs"
+          disabled={busy}
+          onClick={async () => {
+            try {
+              const geo = await getPosition()
+              const r = await api(`/api/v1/field/tickets/${ticketId}/whatsapp-pin`, {
+                method: 'POST',
+                body: geo,
+              })
+              window.open(r.data.url, '_blank', 'noopener')
+              notify('WhatsApp location ready')
+            } catch (e) {
+              notify(e.message, 'error')
+            }
+          }}
+        >
+          WA location
+        </button>
+        <button
+          type="button"
+          className="btn-outline !text-xs"
+          onClick={async () => {
+            try {
+              const r = await api('/api/v1/field/day-summary')
+              setDaySum(r.data)
+              notify(
+                `Today: ${r.data.arrives} arrives · ${r.data.photos} photos · ${r.data.travel_km} km · ${r.data.time_hours}h`
+              )
+            } catch (e) {
+              notify(e.message, 'error')
+            }
+          }}
+        >
+          My day
+        </button>
       </div>
       {travel?.available && (
         <div className="text-[10px] text-slate-500">
@@ -310,6 +351,84 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
 
       {!!attachments.length && (
         <div className="text-[10px] text-slate-500">{attachments.length} photo(s) on ticket</div>
+      )}
+
+
+      {checklist && (
+        <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2 space-y-1.5">
+          <div className="text-[10px] font-semibold uppercase text-slate-500">Close checklist</div>
+          <ul className="text-[10px] space-y-0.5">
+            {checklist.items?.map((it) => (
+              <li key={it.id} className={it.ok ? 'text-emerald-600' : 'text-slate-500'}>
+                {it.ok ? '✓' : '○'} {it.label}
+                {it.required && !it.ok ? ' *' : ''}
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            <button
+              type="button"
+              className="btn-primary !text-[10px]"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  await api(`/api/v1/field/tickets/${ticketId}/close`, {
+                    method: 'POST',
+                    body: { status: 'resolved' },
+                  })
+                  notify('Job resolved')
+                  load()
+                  onChanged?.()
+                } catch (e) {
+                  if (e.code === 'FIELD_CHECKLIST' || e.message?.includes('Close blocked')) {
+                    if (confirm(`${e.message}\n\nForce close anyway?`)) {
+                      try {
+                        await api(`/api/v1/field/tickets/${ticketId}/close`, {
+                          method: 'POST',
+                          body: { status: 'resolved', force: true },
+                        })
+                        notify('Force closed')
+                        load()
+                        onChanged?.()
+                      } catch (err) {
+                        notify(err.message, 'error')
+                      }
+                    }
+                  } else notify(e.message, 'error')
+                } finally {
+                  setBusy(false)
+                }
+              }}
+            >
+              Close job
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-[10px]"
+              onClick={async () => {
+                try {
+                  const r = await api(`/api/v1/field/tickets/${ticketId}/travel-log`)
+                  notify(
+                    r.data.legs?.length
+                      ? `Travel log: ${r.data.total_km} km · ${r.data.legs.length} leg(s)`
+                      : 'No GPS legs yet'
+                  )
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Travel log
+            </button>
+          </div>
+        </div>
+      )}
+      {daySum && (
+        <div className="text-[10px] text-slate-500 rounded-lg bg-black/5 dark:bg-white/5 p-2">
+          <strong>{daySum.date}</strong> · {daySum.arrives} site arrives · {daySum.photos} photos ·{' '}
+          {daySum.closed_jobs} closed · {daySum.travel_km} km · {daySum.time_hours}h logged
+        </div>
       )}
 
       <div>

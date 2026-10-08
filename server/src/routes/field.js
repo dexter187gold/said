@@ -356,8 +356,8 @@ fieldRouter.post('/sync', requireRole('staff'), (req, res, next) => {
           const text = item.body?.body || item.body?.text || ''
           if (text) {
             db.prepare(
-              `INSERT INTO ticket_comments (id, ticket_id, author_id, body, created_at) VALUES (?,?,?,?,?)`
-            ).run(uid(), item.ticket_id, req.user.sub, text, now())
+              `INSERT INTO ticket_comments (id, ticket_id, author_id, author_name, text, internal, time_logged_seconds, created_at) VALUES (?,?,?,?,?,0,0,?)`
+            ).run(uid(), item.ticket_id, req.user.sub, null, text, now())
           }
           db.prepare(`UPDATE offline_queue_log SET status='applied' WHERE id=?`).run(logId)
           results.push({ client_id: item.client_id, ok: true })
@@ -609,4 +609,227 @@ fieldRouter.post('/push/notify', requireRole('staff'), (req, res, next) => {
 fieldRouter.get('/push/vapid-public', (_req, res) => {
   const key = process.env.VAPID_PUBLIC_KEY || ''
   res.json({ data: { publicKey: key, configured: !!key } })
+})
+
+/* ─── Hephaestus-Fire slice 3: close checklist, day summary, travel log, WA pin ─── */
+
+/** Field completeness for closing a job */
+fieldRouter.get('/tickets/:id/close-checklist', (req, res) => {
+  const t = db.prepare(`SELECT * FROM tickets WHERE id = ?`).get(req.params.id)
+  if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+  const photos = db.prepare(`SELECT COUNT(*) AS c FROM ticket_attachments WHERE ticket_id = ?`).get(req.params.id).c
+  const sigs = db.prepare(`SELECT COUNT(*) AS c FROM ticket_signatures WHERE ticket_id = ?`).get(req.params.id).c
+  const checkins = db
+    .prepare(`SELECT kind, COUNT(*) AS c FROM ticket_checkins WHERE ticket_id = ? GROUP BY kind`)
+    .all(req.params.id)
+  const byKind = Object.fromEntries(checkins.map((r) => [r.kind, r.c]))
+  const timeSec = Number(t.time_spent_seconds || 0)
+  const items = [
+    { id: 'arrive', label: 'GPS arrive on site', ok: (byKind.arrive || 0) > 0, required: true },
+    { id: 'photo', label: 'At least one site photo', ok: photos > 0, required: true },
+    { id: 'signature', label: 'Customer signature', ok: sigs > 0, required: false },
+    { id: 'time', label: 'Time logged (any)', ok: timeSec > 0 || !!t.timer_started_at, required: false },
+    { id: 'depart', label: 'GPS depart (optional)', ok: (byKind.depart || 0) > 0, required: false },
+  ]
+  const requiredOk = items.filter((i) => i.required).every((i) => i.ok)
+  res.json({
+    data: {
+      items,
+      required_ok: requiredOk,
+      can_close: requiredOk,
+      counts: { photos, signatures: sigs, arrive: byKind.arrive || 0, depart: byKind.depart || 0 },
+    },
+  })
+})
+
+/**
+ * Close / resolve with field validation
+ * body: { status: 'resolved'|'closed', force?: boolean, note?: string }
+ */
+fieldRouter.post('/tickets/:id/close', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        status: z.enum(['resolved', 'closed']).default('resolved'),
+        force: z.boolean().optional().default(false),
+        note: z.string().optional().nullable(),
+      })
+      .parse(req.body || {})
+    const t = db.prepare(`SELECT * FROM tickets WHERE id = ?`).get(req.params.id)
+    if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+
+    const photos = db.prepare(`SELECT COUNT(*) AS c FROM ticket_attachments WHERE ticket_id = ?`).get(req.params.id).c
+    const arrives = db
+      .prepare(`SELECT COUNT(*) AS c FROM ticket_checkins WHERE ticket_id = ? AND kind = 'arrive'`)
+      .get(req.params.id).c
+    if (!body.force && (photos < 1 || arrives < 1)) {
+      return res.status(400).json({
+        error: true,
+        code: 'FIELD_CHECKLIST',
+        message: 'Close blocked: need GPS arrive + at least one photo (or use force)',
+        data: { photos, arrives },
+      })
+    }
+
+    const resolvedAt = now()
+    db.prepare(`UPDATE tickets SET status=?, resolved_at=COALESCE(resolved_at, ?), updated_at=? WHERE id=?`).run(
+      body.status,
+      resolvedAt,
+      now(),
+      req.params.id
+    )
+    if (body.note) {
+      try {
+        db.prepare(
+          `INSERT INTO ticket_comments (id, ticket_id, author_id, author_name, text, internal, time_logged_seconds, created_at) VALUES (?,?,?,?,?,0,0,?)`
+        ).run(uid(), req.params.id, req.user.sub, null, `Closed: ${body.note}`, now())
+      } catch {}
+    }
+    // auto depart check-in if never departed
+    const dep = db
+      .prepare(`SELECT COUNT(*) AS c FROM ticket_checkins WHERE ticket_id = ? AND kind = 'depart'`)
+      .get(req.params.id).c
+    if (!dep) {
+      db.prepare(
+        `INSERT INTO ticket_checkins (id, ticket_id, user_id, kind, lat, lng, accuracy, note, created_at)
+         VALUES (?,?,?,'depart',NULL,NULL,NULL,'auto on close',?)`
+      ).run(uid(), req.params.id, req.user.sub, now())
+    }
+    audit(req.user.sub, 'field.close', `${req.params.id}:${body.status}`, req.ip)
+    const row = db.prepare(`SELECT * FROM tickets WHERE id = ?`).get(req.params.id)
+    res.json({ data: row })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Travel log for a ticket (legs between check-ins with coords) */
+fieldRouter.get('/tickets/:id/travel-log', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT * FROM ticket_checkins WHERE ticket_id = ? AND lat IS NOT NULL ORDER BY created_at ASC`
+    )
+    .all(req.params.id)
+  const legs = []
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1]
+    const b = rows[i]
+    const km = haversineKm(a.lat, a.lng, b.lat, b.lng)
+    legs.push({
+      from_kind: a.kind,
+      to_kind: b.kind,
+      from_at: a.created_at,
+      to_at: b.created_at,
+      distance_km: Math.round(km * 100) / 100,
+      travel_minutes: estimateTravelMinutes(km),
+    })
+  }
+  const total_km = legs.reduce((s, l) => s + l.distance_km, 0)
+  res.json({ data: { legs, total_km: Math.round(total_km * 100) / 100, points: rows.length } })
+})
+
+/** Tech day summary */
+fieldRouter.get('/day-summary', requireRole('staff'), (req, res) => {
+  const day = (req.query.date || now().slice(0, 10)).slice(0, 10)
+  const userId = req.query.user_id || req.user.sub
+  const checkins = db
+    .prepare(
+      `SELECT c.*, t.title AS ticket_title FROM ticket_checkins c
+       LEFT JOIN tickets t ON t.id = c.ticket_id
+       WHERE c.user_id = ? AND c.created_at LIKE ?
+       ORDER BY c.created_at`
+    )
+    .all(userId, `${day}%`)
+  const photos = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM ticket_attachments a
+       WHERE a.created_by = ? AND a.created_at LIKE ?`
+    )
+    .get(userId, `${day}%`).c
+  const timeSec = db
+    .prepare(
+      `SELECT COALESCE(SUM(seconds),0) AS s FROM ticket_time_entries
+       WHERE user_id = ? AND started_at LIKE ?`
+    )
+    .get(userId, `${day}%`).s
+  const closed = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM tickets
+       WHERE assignee_id = ? AND status IN ('resolved','closed') AND updated_at LIKE ?`
+    )
+    .get(userId, `${day}%`).c
+  // travel between consecutive check-ins that day
+  const withGeo = checkins.filter((c) => c.lat != null)
+  let travel_km = 0
+  for (let i = 1; i < withGeo.length; i++) {
+    travel_km += haversineKm(withGeo[i - 1].lat, withGeo[i - 1].lng, withGeo[i].lat, withGeo[i].lng)
+  }
+  const user = db.prepare(`SELECT name FROM users WHERE id = ?`).get(userId)
+  res.json({
+    data: {
+      date: day,
+      user_id: userId,
+      user_name: user?.name || '',
+      checkins: checkins.length,
+      arrives: checkins.filter((c) => c.kind === 'arrive').length,
+      photos,
+      closed_jobs: closed,
+      time_seconds: timeSec,
+      time_hours: Math.round((timeSec / 3600) * 10) / 10,
+      travel_km: Math.round(travel_km * 10) / 10,
+      travel_minutes: estimateTravelMinutes(travel_km) || 0,
+      timeline: checkins.slice(0, 40),
+    },
+  })
+})
+
+/** WhatsApp share pin for ticket last GPS or live coords from body */
+fieldRouter.post('/tickets/:id/whatsapp-pin', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        lat: z.coerce.number().optional().nullable(),
+        lng: z.coerce.number().optional().nullable(),
+      })
+      .parse(req.body || {})
+    const t = db
+      .prepare(
+        `SELECT t.*, c.name AS client_name, c.phone AS client_phone
+         FROM tickets t LEFT JOIN clients c ON c.id = t.client_id WHERE t.id = ?`
+      )
+      .get(req.params.id)
+    if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+    let lat = body.lat
+    let lng = body.lng
+    if (lat == null || lng == null) {
+      const geo = db
+        .prepare(
+          `SELECT lat, lng FROM ticket_checkins WHERE ticket_id = ? AND lat IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+        )
+        .get(req.params.id)
+      lat = geo?.lat
+      lng = geo?.lng
+    }
+    if (lat == null || lng == null) {
+      return res.status(400).json({ error: true, message: 'No GPS coordinates — arrive on site first or pass lat/lng' })
+    }
+    const maps = `https://maps.google.com/?q=${lat},${lng}`
+    const text =
+      `📍 *SAID Field location*\n` +
+      `Job: ${t.title}\n` +
+      (t.client_name ? `Client: ${t.client_name}\n` : '') +
+      `Map: ${maps}\n` +
+      `Coords: ${lat.toFixed?.(5) ?? lat}, ${lng.toFixed?.(5) ?? lng}`
+    let phone = ''
+    if (t.client_phone) {
+      phone = String(t.client_phone).replace(/\D/g, '')
+      if (phone.startsWith('0')) phone = '27' + phone.slice(1)
+    }
+    const url = phone
+      ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+      : `https://wa.me/?text=${encodeURIComponent(text)}`
+    res.json({ data: { url, text, lat, lng, maps } })
+  } catch (e) {
+    next(e)
+  }
 })
