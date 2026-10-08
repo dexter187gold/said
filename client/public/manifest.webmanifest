@@ -1,7 +1,7 @@
 {
-  "name": "SA Invoice Desk",
-  "short_name": "SAID",
-  "description": "Invoices, tickets, and documents for SA SMEs",
+  "name": "SA Invoice Desk \u2014 Field",
+  "short_name": "SAID Field",
+  "description": "Invoices, tickets, field check-in for SA technicians",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",
@@ -15,5 +15,9 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
+  ],
+  "categories": [
+    "business",
+    "productivity"
   ]
 }

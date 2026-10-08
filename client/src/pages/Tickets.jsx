@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import PageHeader from '../components/PageHeader'
 import { EmptyState } from '../components/EmptyState'
 import DocumentActionBar from '../components/DocumentActionBar'
+import FieldTools from '../components/FieldTools'
+import { registerOnlineFlush } from '../lib/offlineQueue'
 
 const STATUSES = ['open', 'in_progress', 'waiting', 'resolved', 'closed']
 const PRIOS = ['low', 'normal', 'high', 'urgent']
@@ -36,6 +38,7 @@ export default function Tickets() {
   const { notify } = useAuth()
   const [list, setList] = useState([])
   const [metrics, setMetrics] = useState(null)
+  const [util, setUtil] = useState(null)
   const [clients, setClients] = useState([])
   const [staff, setStaff] = useState([])
   const [hourlyRate, setHourlyRate] = useState(450)
@@ -84,7 +87,10 @@ export default function Tickets() {
     const qs = params.toString() ? `?${params}` : ''
     return api(`/api/v1/tickets${qs}`).then((r) => setList(r.data || [])).catch((e) => notify(e.message, 'error'))
   }
-  const loadMetrics = () => api('/api/v1/tickets/metrics').then((r) => setMetrics(r.data)).catch(() => {})
+  const loadMetrics = () => {
+    api('/api/v1/tickets/metrics').then((r) => setMetrics(r.data)).catch(() => {})
+    api('/api/v1/field/utilisation').then((r) => setUtil(r.data)).catch(() => {})
+  }
 
   useEffect(() => {
     try { localStorage.setItem(FILTER_KEY, JSON.stringify(filter)) } catch {}
@@ -314,6 +320,18 @@ export default function Tickets() {
         )}
       </div>
 
+
+        {util?.length > 0 && (
+          <div className="card p-2 flex flex-wrap gap-2 text-[10px]">
+            <span className="font-semibold text-slate-500 uppercase">Utilisation</span>
+            {util.map((u) => (
+              <span key={u.user_id} className="rounded-full bg-black/5 dark:bg-white/10 px-2 py-0.5">
+                {u.name}: {u.open_assigned} open · {u.time_hours}h
+              </span>
+            ))}
+          </div>
+        )}
+
       {view === 'kanban' ? (
         <div className="flex gap-2 overflow-x-auto pb-2 min-h-[50vh]">
           {STATUSES.map((col) => (
@@ -433,6 +451,12 @@ export default function Tickets() {
                     ))}
                   </div>
                 </div>
+                <FieldTools
+                  ticketId={detail.id}
+                  staff={staff}
+                  notify={notify}
+                  onChanged={() => openTicket(detail.id)}
+                />
                 <div className="grid grid-cols-2 gap-2">
                   <div><label className="label">Status</label><select className="input" value={detail.status} onChange={(e) => patch({ status: e.target.value })}>{STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}</select></div>
                   <div><label className="label">Assignee</label><select className="input" value={detail.assignee_id || ''} onChange={(e) => patch({ assignee_id: e.target.value || null })}><option value="">Unassigned</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>

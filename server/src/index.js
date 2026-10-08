@@ -17,6 +17,7 @@ import { insightRouter } from './routes/insight.js'
 import { platformRouter } from './routes/platform.js'
 import { portalRouter } from './routes/portal.js'
 import { moneyRouter, handlePayfastItn, runDueRetainers } from './routes/money.js'
+import { fieldRouter } from './routes/field.js'
 import { errorHandler, notFound } from './middleware/error.js'
 import { requireAuth } from './middleware/auth.js'
 import { rateLimit } from './middleware/rateLimit.js'
@@ -48,7 +49,7 @@ app.get('/api/v1/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'said',
-    version: '1.9.3-hermes',
+    version: '2.0.0-hephaestus',
     templates: tplCount,
     time: new Date().toISOString(),
   })
@@ -101,6 +102,7 @@ app.post('/api/v1/cron/retainers', (req, res) => {
   }
 })
 app.use('/api/v1/money', moneyRouter)
+app.use('/api/v1/field', fieldRouter)
 
 const clientDist = path.join(__dirname, '../../client/dist')
 if (fs.existsSync(clientDist)) {
