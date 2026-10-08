@@ -24,6 +24,7 @@ export default function Platform() {
   const [sessions, setSessions] = useState([])
   const [rateStats, setRateStats] = useState(null)
   const [userBranches, setUserBranches] = useState([])
+  const [deliveries, setDeliveries] = useState([])
 
   const load = () => {
     api('/api/v1/platform/flags').then((r) => setFlags(r.data || [])).catch(() => {})
@@ -33,6 +34,7 @@ export default function Platform() {
       api('/api/v1/platform/popia/summary').then((r) => setPopia(r.data)).catch(() => {})
       api('/api/v1/platform/retention').then((r) => setRetention(r.data || [])).catch(() => {})
       api('/api/v1/platform/webhooks').then((r) => setWebhooks(r.data || [])).catch(() => {})
+      api('/api/v1/platform/webhooks/deliveries?limit=25').then((r) => setDeliveries(r.data || [])).catch(() => {})
       api('/api/v1/platform/health-detail').then((r) => setHealth(r.data)).catch(() => {})
       api('/api/v1/platform/backup/status').then((r) => setBackupStatus(r.data)).catch(() => {})
       api('/api/v1/platform/rate-limits').then((r) => setRateStats(r.data)).catch(() => {})
@@ -156,6 +158,32 @@ export default function Platform() {
           {!isAdmin ? (
             <p className="p-4 text-sm text-slate-500">Admin only</p>
           ) : (
+            <>
+            <div className="p-2 border-b border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                className="btn-outline !text-xs"
+                onClick={async () => {
+                  try {
+                    const token = localStorage.getItem('said_token')
+                    const res = await fetch('/api/v1/platform/audit.csv', {
+                      headers: token ? { Authorization: `Bearer ${token}` } : {},
+                    })
+                    if (!res.ok) throw new Error('Export failed')
+                    const blob = await res.blob()
+                    const a = document.createElement('a')
+                    a.href = URL.createObjectURL(blob)
+                    a.download = `said-audit-${new Date().toISOString().slice(0, 10)}.csv`
+                    a.click()
+                    notify('Audit CSV downloaded')
+                  } catch (e) {
+                    notify(e.message, 'error')
+                  }
+                }}
+              >
+                Export CSV
+              </button>
+            </div>
             <div className="max-h-[60vh] overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-white/90 dark:bg-slate-900/90 text-left text-[10px] uppercase text-slate-500">
@@ -185,6 +213,7 @@ export default function Platform() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
       )}
@@ -376,6 +405,9 @@ export default function Platform() {
       {tab === 'backup' && isAdmin && (
         <div className="card p-3 space-y-3">
           <p className="text-xs text-slate-500">Download a JSON snapshot of core tables for off-site storage.</p>
+          {backupStatus?.last_backup_at && (
+            <p className="text-xs text-slate-500">Last download: {backupStatus.last_backup_at}</p>
+          )}
           {backupStatus?.counts && (
             <ul className="text-xs grid grid-cols-2 sm:grid-cols-3 gap-1">
               {Object.entries(backupStatus.counts).map(([k, v]) => (
@@ -502,6 +534,34 @@ export default function Platform() {
               </li>
             ))}
           </ul>
+          <div className="border-t border-slate-200 dark:border-slate-700 pt-2 space-y-1">
+            <div className="text-[10px] font-semibold uppercase text-slate-500">Recent deliveries</div>
+            {(deliveries || []).slice(0, 15).map((d) => (
+              <div key={d.id} className="flex justify-between gap-2 text-[10px]">
+                <span className="truncate">
+                  {(d.created_at || '').slice(0, 19)} · {d.event} · {d.ok ? 'ok' : 'fail'} · {d.status_code}
+                </span>
+                {!d.ok && (
+                  <button
+                    type="button"
+                    className="btn-outline !text-[9px] !py-0"
+                    onClick={async () => {
+                      try {
+                        await api(`/api/v1/platform/webhooks/deliveries/${d.id}/retry`, { method: 'POST' })
+                        notify('Retry sent')
+                        load()
+                      } catch (e) {
+                        notify(e.message, 'error')
+                      }
+                    }}
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            ))}
+            {!deliveries?.length && <p className="text-[10px] text-slate-500">No deliveries yet</p>}
+          </div>
         </div>
       )}
 

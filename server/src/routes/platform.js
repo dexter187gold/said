@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { db, uid, now, audit } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getRateLimitStats, resetRateLimitStats } from '../middleware/rateLimit.js'
-import { verifyWebhookSignature } from '../services/webhooks.js'
+import { verifyWebhookSignature, retryDelivery } from '../services/webhooks.js'
 
 export const platformRouter = Router()
 platformRouter.use(requireAuth)
@@ -422,6 +422,9 @@ platformRouter.get('/backup', requireRole('admin'), (_req, res) => {
   }
   // strip password hashes from users export for safety note — still include for restore
   audit(_req.user?.sub || 'admin', 'backup.export', `tables=${tables.length}`, _req.ip)
+  try {
+    db.prepare(`INSERT INTO settings (key, value) VALUES ('last_backup_at', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(now())
+  } catch {}
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Content-Disposition', `attachment; filename="said-backup-${now().slice(0, 10)}.json"`)
   res.send(JSON.stringify(snapshot, null, 2))
@@ -437,7 +440,11 @@ platformRouter.get('/backup/status', requireRole('admin'), (_req, res) => {
       counts[t] = 0
     }
   }
-  res.json({ data: { counts, at: now() } })
+  let last_backup_at = null
+  try {
+    last_backup_at = db.prepare(`SELECT value FROM settings WHERE key='last_backup_at'`).get()?.value || null
+  } catch {}
+  res.json({ data: { counts, at: now(), last_backup_at } })
 })
 
 /** Webhooks CRUD */
@@ -523,14 +530,6 @@ platformRouter.post('/webhooks/test', requireRole('admin'), async (req, res) => 
   res.json({ data: { event, results } })
 })
 
-platformRouter.get('/webhooks/deliveries', requireRole('admin'), (req, res) => {
-  const limit = Math.min(100, Number(req.query.limit) || 30)
-  res.json({
-    data: db
-      .prepare(`SELECT * FROM webhook_deliveries ORDER BY created_at DESC LIMIT ?`)
-      .all(limit),
-  })
-})
 
 /** POPIA: anonymise / delete client personal data (admin) */
 platformRouter.post('/popia/forget-client/:id', requireRole('admin'), (req, res) => {
@@ -777,4 +776,44 @@ platformRouter.post('/webhooks/verify-signature', requireRole('admin'), (req, re
   const signature = req.body?.signature || ''
   const bodyStr = typeof body === 'string' ? body : JSON.stringify(body ?? {})
   res.json({ data: { valid: verifyWebhookSignature(bodyStr, secret, signature) } })
+})
+
+/* ─── Hestia-Earth slice 6: audit CSV, delivery retry, last backup ─── */
+
+platformRouter.get('/audit.csv', requireRole('admin'), (req, res) => {
+  const limit = Math.min(5000, Math.max(1, Number(req.query.limit) || 1000))
+  const rows = db
+    .prepare(
+      `SELECT a.created_at, a.action, a.detail, a.ip, u.email AS user_email, u.name AS user_name
+       FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+       ORDER BY a.created_at DESC LIMIT ?`
+    )
+    .all(limit)
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+  const lines = ['created_at,action,detail,ip,user_email,user_name']
+  for (const r of rows) {
+    lines.push([r.created_at, r.action, r.detail, r.ip, r.user_email, r.user_name].map(esc).join(','))
+  }
+  audit(req.user.sub, 'audit.export_csv', `rows=${rows.length}`, req.ip)
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="said-audit-${now().slice(0, 10)}.csv"`)
+  res.send(lines.join('\n'))
+})
+
+platformRouter.post('/webhooks/deliveries/:id/retry', requireRole('admin'), async (req, res) => {
+  const result = await retryDelivery(req.params.id)
+  if (result.error === 'not_found') return res.status(404).json({ error: true, message: 'Delivery not found' })
+  if (result.error === 'webhook_inactive') return res.status(400).json({ error: true, message: 'Webhook inactive or missing' })
+  audit(req.user.sub, 'webhook.retry', req.params.id, req.ip)
+  res.json(result)
+})
+
+platformRouter.get('/webhooks/deliveries', requireRole('admin'), (req, res) => {
+  const limit = Math.min(100, Number(req.query.limit) || 40)
+  const failed = req.query.failed === '1'
+  let sql = `SELECT d.*, w.url AS webhook_url FROM webhook_deliveries d
+             LEFT JOIN webhooks w ON w.id = d.webhook_id`
+  if (failed) sql += ` WHERE d.ok = 0`
+  sql += ` ORDER BY d.created_at DESC LIMIT ?`
+  res.json({ data: db.prepare(sql).all(limit) })
 })
