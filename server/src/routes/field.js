@@ -1005,3 +1005,189 @@ fieldRouter.post('/tickets/:id/offline-status', requireRole('staff'), (req, res,
     next(e)
   }
 })
+
+/* ─── Hephaestus-Fire slice 5: expenses, job pack, today board, voice, call meta ─── */
+
+try {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS field_expenses (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT,
+  user_id TEXT NOT NULL,
+  category TEXT DEFAULT 'other',
+  amount REAL NOT NULL,
+  note TEXT,
+  date TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_field_exp_user ON field_expenses(user_id);
+CREATE INDEX IF NOT EXISTS idx_field_exp_ticket ON field_expenses(ticket_id);
+`)
+} catch (e) {
+  console.warn('field_expenses', e.message)
+}
+
+/** Log field expense (fuel, parking, parts cash, other) */
+fieldRouter.post('/expenses', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        ticket_id: z.string().optional().nullable(),
+        category: z.enum(['fuel', 'parking', 'toll', 'parts', 'other']).default('other'),
+        amount: z.coerce.number().positive(),
+        note: z.string().optional().nullable(),
+        date: z.string().optional(),
+      })
+      .parse(req.body)
+    const id = uid()
+    const date = body.date || now().slice(0, 10)
+    db.prepare(
+      `INSERT INTO field_expenses (id, ticket_id, user_id, category, amount, note, date, created_at)
+       VALUES (?,?,?,?,?,?,?,?)`
+    ).run(id, body.ticket_id || null, req.user.sub, body.category, body.amount, body.note || null, date, now())
+    audit(req.user.sub, 'field.expense', `${body.category}:${body.amount}`, req.ip)
+    res.status(201).json({ data: { id, ...body, date } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+fieldRouter.get('/expenses', requireRole('staff'), (req, res) => {
+  const day = req.query.date
+  const userId = req.query.user_id || req.user.sub
+  let sql = `SELECT e.*, t.title AS ticket_title FROM field_expenses e
+             LEFT JOIN tickets t ON t.id = e.ticket_id WHERE e.user_id = ?`
+  const params = [userId]
+  if (day) {
+    sql += ` AND e.date = ?`
+    params.push(day.slice(0, 10))
+  }
+  sql += ` ORDER BY e.date DESC, e.created_at DESC LIMIT 100`
+  const rows = db.prepare(sql).all(...params)
+  const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0)
+  res.json({ data: rows, total })
+})
+
+/** Job pack — text summary of field activity for a ticket */
+fieldRouter.get('/tickets/:id/job-pack', (req, res) => {
+  const t = db
+    .prepare(
+      `SELECT t.*, c.name AS client_name, c.phone AS client_phone, u.name AS assignee_name
+       FROM tickets t
+       LEFT JOIN clients c ON c.id = t.client_id
+       LEFT JOIN users u ON u.id = t.assignee_id
+       WHERE t.id = ?`
+    )
+    .get(req.params.id)
+  if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+  const checkins = db
+    .prepare(`SELECT * FROM ticket_checkins WHERE ticket_id = ? ORDER BY created_at`)
+    .all(req.params.id)
+  const photos = db
+    .prepare(`SELECT id, kind, name, created_at FROM ticket_attachments WHERE ticket_id = ? ORDER BY created_at`)
+    .all(req.params.id)
+  const sigs = db
+    .prepare(`SELECT signer_name, created_at FROM ticket_signatures WHERE ticket_id = ?`)
+    .all(req.params.id)
+  const notes = db
+    .prepare(`SELECT body, created_at FROM field_notes WHERE ticket_id = ? ORDER BY created_at`)
+    .all(req.params.id)
+  const expenses = db
+    .prepare(`SELECT category, amount, note, date FROM field_expenses WHERE ticket_id = ?`)
+    .all(req.params.id)
+  let parts = []
+  try {
+    parts = JSON.parse(t.parts_json || '[]')
+  } catch {}
+  const lines = [
+    `*SAID Job pack*`,
+    `Job: ${t.title}`,
+    `Status: ${t.status}`,
+    t.client_name ? `Client: ${t.client_name}` : null,
+    t.assignee_name ? `Tech: ${t.assignee_name}` : null,
+    t.time_spent_seconds ? `Time: ${Math.round(t.time_spent_seconds / 60)} min` : null,
+    '',
+    'Check-ins:',
+    ...(checkins.length
+      ? checkins.map((c) => `• ${(c.created_at || '').slice(0, 16)} ${c.kind}${c.lat != null ? ` @ ${c.lat.toFixed?.(4)},${c.lng.toFixed?.(4)}` : ''}`)
+      : ['• none']),
+    '',
+    `Photos: ${photos.length} (${photos.map((p) => p.kind).join(', ') || '—'})`,
+    `Signatures: ${sigs.length}${sigs[0]?.signer_name ? ` (${sigs[0].signer_name})` : ''}`,
+    parts.length ? `Parts: ${parts.map((p) => `${p.name}×${p.qty}`).join(', ')}` : null,
+    notes.length ? `Notes:\n${notes.map((n) => `• ${n.body}`).join('\n')}` : null,
+    expenses.length
+      ? `Expenses: R ${expenses.reduce((s, e) => s + Number(e.amount), 0).toFixed(2)}`
+      : null,
+  ].filter((x) => x != null)
+  const text = lines.join('\n')
+  res.json({
+    data: {
+      text,
+      whatsapp_url: `https://wa.me/?text=${encodeURIComponent(text)}`,
+      counts: {
+        checkins: checkins.length,
+        photos: photos.length,
+        signatures: sigs.length,
+        notes: notes.length,
+        expenses: expenses.length,
+      },
+    },
+  })
+})
+
+/** Today's board for a tech */
+fieldRouter.get('/today', requireRole('staff'), (req, res) => {
+  const day = (req.query.date || now().slice(0, 10)).slice(0, 10)
+  const userId = req.query.user_id || req.user.sub
+  const assigned = db
+    .prepare(
+      `SELECT t.id, t.title, t.status, t.priority, t.due_date, c.name AS client_name, c.phone AS client_phone
+       FROM tickets t LEFT JOIN clients c ON c.id = t.client_id
+       WHERE t.assignee_id = ? AND COALESCE(t.is_template,0)=0
+         AND t.status IN ('open','in_progress','waiting')
+       ORDER BY CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, t.due_date`
+    )
+    .all(userId)
+  const doneToday = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM tickets
+       WHERE assignee_id = ? AND status IN ('resolved','closed') AND updated_at LIKE ?`
+    )
+    .get(userId, `${day}%`).c
+  const expenses = db
+    .prepare(`SELECT COALESCE(SUM(amount),0) AS s FROM field_expenses WHERE user_id = ? AND date = ?`)
+    .get(userId, day).s
+  res.json({
+    data: {
+      date: day,
+      open_jobs: assigned,
+      closed_today: doneToday,
+      expenses_today: expenses,
+    },
+  })
+})
+
+/** Client call meta for ticket */
+fieldRouter.get('/tickets/:id/call', (req, res) => {
+  const t = db
+    .prepare(
+      `SELECT t.id, t.title, c.name AS client_name, c.phone AS client_phone
+       FROM tickets t LEFT JOIN clients c ON c.id = t.client_id WHERE t.id = ?`
+    )
+    .get(req.params.id)
+  if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+  let tel = null
+  if (t.client_phone) {
+    const p = String(t.client_phone).replace(/\D/g, '')
+    tel = p ? `tel:+${p.startsWith('0') ? '27' + p.slice(1) : p}` : null
+  }
+  res.json({
+    data: {
+      client_name: t.client_name,
+      phone: t.client_phone,
+      tel_url: tel,
+      title: t.title,
+    },
+  })
+})

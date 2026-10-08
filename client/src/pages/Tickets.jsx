@@ -349,6 +349,23 @@ export default function Tickets() {
             >
               My route ETA
             </button>
+            <button
+              type="button"
+              className="btn-outline !text-[10px] !py-0.5"
+              onClick={async () => {
+                try {
+                  const r = await api('/api/v1/field/today')
+                  const n = r.data.open_jobs?.length || 0
+                  notify(
+                    `Today: ${n} open · ${r.data.closed_today} closed · expenses R ${Number(r.data.expenses_today || 0).toFixed(2)}`
+                  )
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Today board
+            </button>
           </div>
         )}
 

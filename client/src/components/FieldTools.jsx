@@ -21,6 +21,10 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
   const [noteText, setNoteText] = useState('')
   const [rating, setRating] = useState('')
   const [photoKind, setPhotoKind] = useState('photo')
+  const [expAmount, setExpAmount] = useState('')
+  const [expCat, setExpCat] = useState('fuel')
+  const [recording, setRecording] = useState(false)
+  const mediaRec = useRef(null)
   const canvasRef = useRef(null)
   const drawing = useRef(false)
   const fileRef = useRef(null)
@@ -314,6 +318,89 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
           className="btn-outline !text-xs"
           onClick={async () => {
             try {
+              const r = await api(`/api/v1/field/tickets/${ticketId}/call`)
+              if (r.data.tel_url) window.location.href = r.data.tel_url
+              else notify('No client phone on this job', 'error')
+            } catch (e) {
+              notify(e.message, 'error')
+            }
+          }}
+        >
+          Call client
+        </button>
+        <button
+          type="button"
+          className="btn-outline !text-xs"
+          onClick={async () => {
+            try {
+              const r = await api(`/api/v1/field/tickets/${ticketId}/job-pack`)
+              window.open(r.data.whatsapp_url, '_blank', 'noopener')
+              notify(`Job pack · ${r.data.counts.photos} photos · ${r.data.counts.checkins} check-ins`)
+            } catch (e) {
+              notify(e.message, 'error')
+            }
+          }}
+        >
+          Job pack WA
+        </button>
+        <button
+          type="button"
+          className={`btn-outline !text-xs ${recording ? '!border-red-500 !text-red-600' : ''}`}
+          disabled={busy}
+          onClick={async () => {
+            try {
+              if (recording && mediaRec.current) {
+                mediaRec.current.stop()
+                setRecording(false)
+                return
+              }
+              if (!navigator.mediaDevices?.getUserMedia) {
+                return notify('Mic not available', 'error')
+              }
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+              const rec = new MediaRecorder(stream)
+              const chunks = []
+              rec.ondataavailable = (e) => chunks.push(e.data)
+              rec.onstop = async () => {
+                stream.getTracks().forEach((tr) => tr.stop())
+                const blob = new Blob(chunks, { type: 'audio/webm' })
+                const reader = new FileReader()
+                reader.onload = async () => {
+                  try {
+                    await api(`/api/v1/field/tickets/${ticketId}/attachments`, {
+                      method: 'POST',
+                      body: {
+                        kind: 'voice',
+                        name: `voice-${Date.now()}.webm`,
+                        mime: 'audio/webm',
+                        data_url: reader.result,
+                      },
+                    })
+                    notify('Voice note saved')
+                    load()
+                  } catch (err) {
+                    notify(err.message, 'error')
+                  }
+                }
+                reader.readAsDataURL(blob)
+              }
+              mediaRec.current = rec
+              rec.start()
+              setRecording(true)
+              notify('Recording… tap again to stop')
+            } catch (e) {
+              notify(e.message || 'Mic permission denied', 'error')
+              setRecording(false)
+            }
+          }}
+        >
+          {recording ? 'Stop voice' : 'Voice note'}
+        </button>
+        <button
+          type="button"
+          className="btn-outline !text-xs"
+          onClick={async () => {
+            try {
               const r = await api('/api/v1/field/day-summary')
               setDaySum(r.data)
               notify(
@@ -396,6 +483,54 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
 
 
       
+
+      <div className="flex flex-wrap gap-1 items-end">
+        <div>
+          <div className="text-[10px] font-semibold text-slate-500 mb-0.5">Expense</div>
+          <select className="input !text-[10px] !py-1 !w-auto" value={expCat} onChange={(e) => setExpCat(e.target.value)}>
+            <option value="fuel">Fuel</option>
+            <option value="parking">Parking</option>
+            <option value="toll">Toll</option>
+            <option value="parts">Parts cash</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <input
+          className="input !text-xs !w-24"
+          type="number"
+          step="0.01"
+          placeholder="R amount"
+          value={expAmount}
+          onChange={(e) => setExpAmount(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn-outline !text-[10px]"
+          disabled={busy || !expAmount}
+          onClick={async () => {
+            setBusy(true)
+            try {
+              await api('/api/v1/field/expenses', {
+                method: 'POST',
+                body: {
+                  ticket_id: ticketId,
+                  category: expCat,
+                  amount: Number(expAmount),
+                },
+              })
+              notify(`Expense R ${Number(expAmount).toFixed(2)} logged`)
+              setExpAmount('')
+            } catch (e) {
+              notify(e.message, 'error')
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          Log expense
+        </button>
+      </div>
+
       <div className="grid gap-2 sm:grid-cols-2">
         <div>
           <div className="text-[10px] font-semibold text-slate-500 mb-1">Field note</div>
