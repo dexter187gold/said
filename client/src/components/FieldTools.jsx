@@ -16,6 +16,11 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
   const [travel, setTravel] = useState(null)
   const [checklist, setChecklist] = useState(null)
   const [daySum, setDaySum] = useState(null)
+  const [partName, setPartName] = useState('')
+  const [partQty, setPartQty] = useState('1')
+  const [noteText, setNoteText] = useState('')
+  const [rating, setRating] = useState('')
+  const [photoKind, setPhotoKind] = useState('photo')
   const canvasRef = useRef(null)
   const drawing = useRef(false)
   const fileRef = useRef(null)
@@ -95,14 +100,14 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
       await api(`/api/v1/field/tickets/${ticketId}/attachments`, {
         method: 'POST',
         body: {
-          kind: 'photo',
+          kind: photoKind || 'photo',
           name: file.name,
           mime: file.type || 'image/jpeg',
           data_url,
           ...geo,
         },
       })
-      notify('Photo attached')
+      notify(`${photoKind || 'photo'} attached`)
       load()
     } catch (err) {
       notify(err.message, 'error')
@@ -215,6 +220,16 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
         <button type="button" className="btn-outline !text-xs" disabled={busy} onClick={() => checkin('depart')}>
           Depart
         </button>
+        <select
+          className="input !w-auto !text-[10px] !py-1"
+          value={photoKind}
+          onChange={(e) => setPhotoKind(e.target.value)}
+          title="Photo type"
+        >
+          <option value="photo">Photo</option>
+          <option value="before">Before</option>
+          <option value="after">After</option>
+        </select>
         <label className="btn-outline !text-xs cursor-pointer">
           Camera
           <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onPhoto} />
@@ -350,11 +365,132 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
       )}
 
       {!!attachments.length && (
-        <div className="text-[10px] text-slate-500">{attachments.length} photo(s) on ticket</div>
+        <div className="space-y-1">
+          <div className="text-[10px] text-slate-500">{attachments.length} photo(s) on ticket</div>
+          <div className="flex flex-wrap gap-1">
+            {attachments.slice(0, 8).map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="rounded border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 text-[9px] uppercase"
+                onClick={async () => {
+                  try {
+                    const r = await api(`/api/v1/field/attachments/${a.id}`)
+                    if (r.data?.data_url) {
+                      const w = window.open('')
+                      if (w) {
+                        w.document.write(`<img src="${r.data.data_url}" style="max-width:100%"/>`)
+                      }
+                    }
+                  } catch (e) {
+                    notify(e.message, 'error')
+                  }
+                }}
+              >
+                {a.kind || 'photo'}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
 
-      {checklist && (
+      
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <div className="text-[10px] font-semibold text-slate-500 mb-1">Field note</div>
+          <div className="flex gap-1">
+            <input
+              className="input !text-xs flex-1"
+              placeholder="Quick note…"
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn-outline !text-[10px]"
+              disabled={busy || !noteText.trim()}
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  if (!navigator.onLine) {
+                    await enqueue({ action: 'comment', ticket_id: ticketId, body: { body: noteText } })
+                    notify('Note queued offline')
+                  } else {
+                    await api(`/api/v1/field/tickets/${ticketId}/notes`, {
+                      method: 'POST',
+                      body: { body: noteText },
+                    })
+                    notify('Note saved')
+                  }
+                  setNoteText('')
+                  onChanged?.()
+                } catch (e) {
+                  notify(e.message, 'error')
+                } finally {
+                  setBusy(false)
+                }
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold text-slate-500 mb-1">Add part</div>
+          <div className="flex gap-1">
+            <input
+              className="input !text-xs flex-1"
+              placeholder="Part name"
+              value={partName}
+              onChange={(e) => setPartName(e.target.value)}
+            />
+            <input
+              className="input !text-xs !w-12"
+              type="number"
+              min="1"
+              value={partQty}
+              onChange={(e) => setPartQty(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn-outline !text-[10px]"
+              disabled={busy || !partName.trim()}
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  await api(`/api/v1/field/tickets/${ticketId}/parts`, {
+                    method: 'POST',
+                    body: { name: partName, qty: Number(partQty) || 1, cost: 0 },
+                  })
+                  notify('Part added')
+                  setPartName('')
+                  onChanged?.()
+                } catch (e) {
+                  notify(e.message, 'error')
+                } finally {
+                  setBusy(false)
+                }
+              }}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 text-[10px]">
+        <span className="font-semibold text-slate-500">Customer rating</span>
+        <select className="input !w-auto !text-[10px] !py-0.5" value={rating} onChange={(e) => setRating(e.target.value)}>
+          <option value="">—</option>
+          {[1, 2, 3, 4, 5].map((n) => (
+            <option key={n} value={n}>
+              {n}/5
+            </option>
+          ))}
+        </select>
+      </div>
+
+{checklist && (
         <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2 space-y-1.5">
           <div className="text-[10px] font-semibold uppercase text-slate-500">Close checklist</div>
           <ul className="text-[10px] space-y-0.5">
@@ -375,7 +511,10 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
                 try {
                   await api(`/api/v1/field/tickets/${ticketId}/close`, {
                     method: 'POST',
-                    body: { status: 'resolved' },
+                    body: {
+                      status: 'resolved',
+                      rating: rating ? Number(rating) : undefined,
+                    },
                   })
                   notify('Job resolved')
                   load()
@@ -425,9 +564,25 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
         </div>
       )}
       {daySum && (
-        <div className="text-[10px] text-slate-500 rounded-lg bg-black/5 dark:bg-white/5 p-2">
-          <strong>{daySum.date}</strong> · {daySum.arrives} site arrives · {daySum.photos} photos ·{' '}
-          {daySum.closed_jobs} closed · {daySum.travel_km} km · {daySum.time_hours}h logged
+        <div className="text-[10px] text-slate-500 rounded-lg bg-black/5 dark:bg-white/5 p-2 flex flex-wrap items-center gap-2">
+          <span>
+            <strong>{daySum.date}</strong> · {daySum.arrives} arrives · {daySum.photos} photos ·{' '}
+            {daySum.closed_jobs} closed · {daySum.travel_km} km · {daySum.time_hours}h
+          </span>
+          <button
+            type="button"
+            className="btn-outline !text-[10px] !py-0.5"
+            onClick={async () => {
+              try {
+                const r = await api('/api/v1/field/day-summary/whatsapp')
+                window.open(r.data.url, '_blank', 'noopener')
+              } catch (e) {
+                notify(e.message, 'error')
+              }
+            }}
+          >
+            Share day WA
+          </button>
         </div>
       )}
 

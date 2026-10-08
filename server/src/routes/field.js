@@ -96,7 +96,7 @@ fieldRouter.post('/tickets/:id/attachments', requireRole('staff'), (req, res, ne
   try {
     const body = z
       .object({
-        kind: z.enum(['photo', 'file', 'signature_photo']).default('photo'),
+        kind: z.enum(['photo', 'file', 'signature_photo', 'before', 'after', 'voice']).default('photo'),
         name: z.string().optional().nullable(),
         mime: z.string().default('image/jpeg'),
         data_url: z.string().min(20),
@@ -653,6 +653,7 @@ fieldRouter.post('/tickets/:id/close', requireRole('staff'), (req, res, next) =>
         status: z.enum(['resolved', 'closed']).default('resolved'),
         force: z.boolean().optional().default(false),
         note: z.string().optional().nullable(),
+        rating: z.coerce.number().int().min(1).max(5).optional().nullable(),
       })
       .parse(req.body || {})
     const t = db.prepare(`SELECT * FROM tickets WHERE id = ?`).get(req.params.id)
@@ -694,6 +695,13 @@ fieldRouter.post('/tickets/:id/close', requireRole('staff'), (req, res, next) =>
         `INSERT INTO ticket_checkins (id, ticket_id, user_id, kind, lat, lng, accuracy, note, created_at)
          VALUES (?,?,?,'depart',NULL,NULL,NULL,'auto on close',?)`
       ).run(uid(), req.params.id, req.user.sub, now())
+    }
+    if (body.rating) {
+      try {
+        db.prepare(
+          `INSERT INTO ticket_comments (id, ticket_id, author_id, author_name, text, internal, time_logged_seconds, created_at) VALUES (?,?,?,?,?,0,0,?)`
+        ).run(uid(), req.params.id, req.user.sub, null, `Customer rating: ${body.rating}/5`, now())
+      } catch {}
     }
     audit(req.user.sub, 'field.close', `${req.params.id}:${body.status}`, req.ip)
     const row = db.prepare(`SELECT * FROM tickets WHERE id = ?`).get(req.params.id)
@@ -829,6 +837,170 @@ fieldRouter.post('/tickets/:id/whatsapp-pin', requireRole('staff'), (req, res, n
       ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
       : `https://wa.me/?text=${encodeURIComponent(text)}`
     res.json({ data: { url, text, lat, lng, maps } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+
+/* ─── Hephaestus-Fire slice 4: ratings, field parts, offline notes, gallery, day WA ─── */
+
+try {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS field_notes (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL,
+  user_id TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_field_notes_ticket ON field_notes(ticket_id);
+`)
+} catch (e) {
+  console.warn('field_notes', e.message)
+}
+
+/** Quick field note (works with offline sync action "comment") */
+fieldRouter.post('/tickets/:id/notes', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z.object({ body: z.string().min(1).max(4000) }).parse(req.body)
+    const ticket = db.prepare(`SELECT id FROM tickets WHERE id = ?`).get(req.params.id)
+    if (!ticket) return res.status(404).json({ error: true, message: 'Not found' })
+    const id = uid()
+    db.prepare(`INSERT INTO field_notes (id, ticket_id, user_id, body, created_at) VALUES (?,?,?,?,?)`).run(
+      id, req.params.id, req.user.sub, body.body, now()
+    )
+    try {
+      db.prepare(
+        `INSERT INTO ticket_comments (id, ticket_id, author_id, author_name, text, internal, time_logged_seconds, created_at) VALUES (?,?,?,?,?,1,0,?)`
+      ).run(uid(), req.params.id, req.user.sub, null, body.body, now())
+    } catch {}
+    res.status(201).json({ data: { id, body: body.body } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+fieldRouter.get('/tickets/:id/notes', (req, res) => {
+  const rows = db
+    .prepare(`SELECT * FROM field_notes WHERE ticket_id = ? ORDER BY created_at DESC LIMIT 50`)
+    .all(req.params.id)
+  res.json({ data: rows })
+})
+
+/** Add part from field and merge into ticket parts_json */
+fieldRouter.post('/tickets/:id/parts', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        name: z.string().min(1),
+        qty: z.coerce.number().default(1),
+        cost: z.coerce.number().default(0),
+      })
+      .parse(req.body)
+    const t = db.prepare(`SELECT * FROM tickets WHERE id = ?`).get(req.params.id)
+    if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+    let parts = []
+    try {
+      parts = JSON.parse(t.parts_json || '[]')
+      if (!Array.isArray(parts)) parts = []
+    } catch {
+      parts = []
+    }
+    parts.push({ name: body.name, qty: body.qty, cost: body.cost })
+    db.prepare(`UPDATE tickets SET parts_json=?, updated_at=? WHERE id=?`).run(JSON.stringify(parts), now(), req.params.id)
+    audit(req.user.sub, 'field.part', `${req.params.id}:${body.name}`, req.ip)
+    res.status(201).json({ data: { parts } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Attachment gallery with optional kind filter */
+fieldRouter.get('/tickets/:id/gallery', (req, res) => {
+  const kind = req.query.kind
+  let sql = `SELECT id, ticket_id, kind, name, mime, lat, lng, created_at, data_url FROM ticket_attachments WHERE ticket_id = ?`
+  const params = [req.params.id]
+  if (kind) {
+    sql += ` AND kind = ?`
+    params.push(kind)
+  }
+  sql += ` ORDER BY created_at DESC LIMIT 40`
+  const rows = db.prepare(sql).all(...params)
+  // trim data for list? keep full for mobile gallery thumbs — client can use data_url
+  res.json({
+    data: rows.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      name: r.name,
+      mime: r.mime,
+      created_at: r.created_at,
+      thumb: r.data_url && r.data_url.length < 500_000 ? r.data_url : null,
+      has_full: true,
+    })),
+  })
+})
+
+/** Day summary as WhatsApp text */
+fieldRouter.get('/day-summary/whatsapp', requireRole('staff'), (req, res) => {
+  const day = (req.query.date || now().slice(0, 10)).slice(0, 10)
+  const userId = req.query.user_id || req.user.sub
+  const checkins = db
+    .prepare(
+      `SELECT c.*, t.title AS ticket_title FROM ticket_checkins c
+       LEFT JOIN tickets t ON t.id = c.ticket_id
+       WHERE c.user_id = ? AND c.created_at LIKE ? ORDER BY c.created_at`
+    )
+    .all(userId, `${day}%`)
+  const photos = db
+    .prepare(`SELECT COUNT(*) AS c FROM ticket_attachments WHERE created_by = ? AND created_at LIKE ?`)
+    .get(userId, `${day}%`).c
+  const timeSec = db
+    .prepare(`SELECT COALESCE(SUM(seconds),0) AS s FROM ticket_time_entries WHERE user_id = ? AND started_at LIKE ?`)
+    .get(userId, `${day}%`).s
+  const closed = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM tickets WHERE assignee_id = ? AND status IN ('resolved','closed') AND updated_at LIKE ?`
+    )
+    .get(userId, `${day}%`).c
+  const withGeo = checkins.filter((c) => c.lat != null)
+  let travel_km = 0
+  for (let i = 1; i < withGeo.length; i++) {
+    travel_km += haversineKm(withGeo[i - 1].lat, withGeo[i - 1].lng, withGeo[i].lat, withGeo[i].lng)
+  }
+  const user = db.prepare(`SELECT name FROM users WHERE id = ?`).get(userId)
+  const lines = [
+    `*SAID Field — Day summary*`,
+    `Date: ${day}`,
+    `Tech: ${user?.name || ''}`,
+    `Site arrives: ${checkins.filter((c) => c.kind === 'arrive').length}`,
+    `Photos: ${photos}`,
+    `Jobs closed: ${closed}`,
+    `Time logged: ${Math.round((timeSec / 3600) * 10) / 10}h`,
+    `Travel ~${Math.round(travel_km * 10) / 10} km`,
+    '',
+    'Timeline:',
+  ]
+  for (const c of checkins.slice(0, 15)) {
+    lines.push(`• ${(c.created_at || '').slice(11, 16)} ${c.kind} — ${c.ticket_title || c.ticket_id.slice(0, 8)}`)
+  }
+  const text = lines.join('\n')
+  res.json({
+    data: {
+      text,
+      url: `https://wa.me/?text=${encodeURIComponent(text)}`,
+    },
+  })
+})
+
+/** Offline note sync support already maps comment action — document draft status updates */
+fieldRouter.post('/tickets/:id/offline-status', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({ status: z.enum(['open', 'in_progress', 'waiting', 'resolved', 'closed']) })
+      .parse(req.body)
+    db.prepare(`UPDATE tickets SET status=?, updated_at=? WHERE id=?`).run(body.status, now(), req.params.id)
+    res.json({ data: { status: body.status } })
   } catch (e) {
     next(e)
   }
