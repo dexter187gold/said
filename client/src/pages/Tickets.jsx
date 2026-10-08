@@ -322,13 +322,33 @@ export default function Tickets() {
 
 
         {util?.length > 0 && (
-          <div className="card p-2 flex flex-wrap gap-2 text-[10px]">
+          <div className="card p-2 flex flex-wrap gap-2 text-[10px] items-center">
             <span className="font-semibold text-slate-500 uppercase">Utilisation</span>
             {util.map((u) => (
               <span key={u.user_id} className="rounded-full bg-black/5 dark:bg-white/10 px-2 py-0.5">
                 {u.name}: {u.open_assigned} open · {u.time_hours}h
               </span>
             ))}
+            <button
+              type="button"
+              className="btn-outline !text-[10px] !py-0.5"
+              onClick={async () => {
+                try {
+                  const r = await api('/api/v1/field/route-plan')
+                  const mins = r.data.total_travel_minutes
+                  const km = r.data.total_km
+                  notify(
+                    r.data.stops?.length
+                      ? `Route: ${r.data.stops.length} stops · ~${mins || 0} min · ${km || 0} km`
+                      : 'No open jobs on your route'
+                  )
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              My route ETA
+            </button>
           </div>
         )}
 

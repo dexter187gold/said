@@ -379,3 +379,234 @@ fieldRouter.post('/sync', requireRole('staff'), (req, res, next) => {
     next(e)
   }
 })
+
+/* ─── Hephaestus-Fire slice 2: push hooks, travel estimates ─── */
+
+try {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT,
+  auth TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+`)
+} catch (e) {
+  console.warn('push_subscriptions', e.message)
+}
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const toRad = (d) => (d * Math.PI) / 180
+  const R = 6371
+  const dLat = toRad(lat2 - lat1)
+  const dLng = toRad(lng2 - lng1)
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+/** Rough SA urban travel: avg 35 km/h + 5 min buffer */
+function estimateTravelMinutes(km) {
+  if (km == null || Number.isNaN(km)) return null
+  return Math.max(5, Math.round((km / 35) * 60 + 5))
+}
+
+/** Travel estimate from last check-in of current user to ticket last known coords */
+fieldRouter.get('/tickets/:id/travel', (req, res) => {
+  const ticketId = req.params.id
+  const lastOnTicket = db
+    .prepare(
+      `SELECT lat, lng, created_at FROM ticket_checkins
+       WHERE ticket_id = ? AND lat IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(ticketId)
+  const lastMine = db
+    .prepare(
+      `SELECT lat, lng, ticket_id, created_at FROM ticket_checkins
+       WHERE user_id = ? AND lat IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(req.user.sub)
+
+  let from = lastMine
+  let to = lastOnTicket
+  // if user has no history, use company null
+  if (!to) {
+    return res.json({
+      data: {
+        available: false,
+        reason: 'No GPS check-in on this ticket yet — arrive once to seed coordinates',
+      },
+    })
+  }
+  if (!from || from.ticket_id === ticketId) {
+    // use ticket's first arrive as destination only
+    return res.json({
+      data: {
+        available: true,
+        destination: { lat: to.lat, lng: to.lng },
+        distance_km: null,
+        travel_minutes: null,
+        maps_url: `https://maps.google.com/?q=${to.lat},${to.lng}`,
+        note: 'Destination known; travel from your last site unavailable',
+      },
+    })
+  }
+  const km = haversineKm(from.lat, from.lng, to.lat, to.lng)
+  const mins = estimateTravelMinutes(km)
+  res.json({
+    data: {
+      available: true,
+      from: { lat: from.lat, lng: from.lng, at: from.created_at },
+      destination: { lat: to.lat, lng: to.lng, at: to.created_at },
+      distance_km: Math.round(km * 10) / 10,
+      travel_minutes: mins,
+      maps_url: `https://www.google.com/maps/dir/${from.lat},${from.lng}/${to.lat},${to.lng}`,
+    },
+  })
+})
+
+/** Route plan: ordered open tickets with last check-in coords for assignee */
+fieldRouter.get('/route-plan', requireRole('staff'), (req, res) => {
+  const assignee = req.query.assignee_id || req.user.sub
+  const tickets = db
+    .prepare(
+      `SELECT t.id, t.title, t.status, t.priority, c.name AS client_name
+       FROM tickets t LEFT JOIN clients c ON c.id = t.client_id
+       WHERE t.assignee_id = ? AND t.status IN ('open','in_progress','waiting')
+         AND COALESCE(t.is_template,0)=0
+       ORDER BY CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, t.created_at`
+    )
+    .all(assignee)
+  const stops = tickets.map((t) => {
+    const geo = db
+      .prepare(
+        `SELECT lat, lng FROM ticket_checkins WHERE ticket_id = ? AND lat IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(t.id)
+    return { ...t, lat: geo?.lat ?? null, lng: geo?.lng ?? null }
+  })
+  let totalKm = 0
+  let totalMin = 0
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1]
+    const b = stops[i]
+    if (a.lat != null && b.lat != null) {
+      const km = haversineKm(a.lat, a.lng, b.lat, b.lng)
+      totalKm += km
+      totalMin += estimateTravelMinutes(km) || 0
+      stops[i].from_prev_km = Math.round(km * 10) / 10
+      stops[i].from_prev_min = estimateTravelMinutes(km)
+    }
+  }
+  res.json({
+    data: {
+      assignee_id: assignee,
+      stops,
+      total_km: Math.round(totalKm * 10) / 10,
+      total_travel_minutes: totalMin,
+    },
+  })
+})
+
+/** Save Web Push subscription */
+fieldRouter.post('/push/subscribe', (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        endpoint: z.string().url(),
+        keys: z
+          .object({
+            p256dh: z.string().optional(),
+            auth: z.string().optional(),
+          })
+          .optional(),
+      })
+      .parse(req.body)
+    const existing = db.prepare(`SELECT id FROM push_subscriptions WHERE endpoint = ?`).get(body.endpoint)
+    if (existing) {
+      db.prepare(`UPDATE push_subscriptions SET user_id=?, p256dh=?, auth=? WHERE id=?`).run(
+        req.user.sub,
+        body.keys?.p256dh || null,
+        body.keys?.auth || null,
+        existing.id
+      )
+      return res.json({ data: { id: existing.id, updated: true } })
+    }
+    const id = uid()
+    db.prepare(
+      `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?,?,?,?,?,?)`
+    ).run(id, req.user.sub, body.endpoint, body.keys?.p256dh || null, body.keys?.auth || null, now())
+    audit(req.user.sub, 'push.subscribe', null, req.ip)
+    res.status(201).json({ data: { id } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+fieldRouter.delete('/push/subscribe', (req, res, next) => {
+  try {
+    const endpoint = z.string().parse(req.body?.endpoint || req.query?.endpoint)
+    db.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?`).run(endpoint, req.user.sub)
+    res.json({ data: { ok: true } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+fieldRouter.get('/push/subscriptions', requireRole('admin'), (_req, res) => {
+  const rows = db
+    .prepare(`SELECT id, user_id, endpoint, created_at FROM push_subscriptions ORDER BY created_at DESC LIMIT 100`)
+    .all()
+  res.json({ data: rows })
+})
+
+/**
+ * Queue a notification intent (actual web-push send needs VAPID keys in env)
+ * Stores audit + returns payload for client-side showNotification fallback
+ */
+fieldRouter.post('/push/notify', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        user_id: z.string().optional(),
+        title: z.string().min(1),
+        body: z.string().optional(),
+        url: z.string().optional(),
+        ticket_id: z.string().optional(),
+      })
+      .parse(req.body)
+    const targetUser = body.user_id || req.user.sub
+    const subs = db
+      .prepare(`SELECT * FROM push_subscriptions WHERE user_id = ?`)
+      .all(targetUser)
+    const payload = {
+      title: body.title,
+      body: body.body || '',
+      url: body.url || (body.ticket_id ? `/tickets` : '/'),
+      ticket_id: body.ticket_id || null,
+    }
+    // Stub: real send would use web-push library + VAPID
+    audit(req.user.sub, 'push.notify', `${targetUser}:${body.title}`, req.ip)
+    res.json({
+      data: {
+        subscribers: subs.length,
+        payload,
+        note:
+          subs.length === 0
+            ? 'No push subscriptions for user — client can still show local notification'
+            : 'Subscription stored; configure VAPID (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY) for server push',
+      },
+    })
+  } catch (e) {
+    next(e)
+  }
+})
+
+fieldRouter.get('/push/vapid-public', (_req, res) => {
+  const key = process.env.VAPID_PUBLIC_KEY || ''
+  res.json({ data: { publicKey: key, configured: !!key } })
+})

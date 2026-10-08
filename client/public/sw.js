@@ -1,4 +1,4 @@
-const CACHE = 'said-shell-v16-hephaestus'
+const CACHE = 'said-shell-v17-hephaestus'
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg']
 
 self.addEventListener('install', (e) => {
@@ -29,7 +29,6 @@ self.addEventListener('fetch', (e) => {
   )
 })
 
-/* Background sync hook — client stores queue in IndexedDB / localStorage */
 self.addEventListener('sync', (e) => {
   if (e.tag === 'said-offline-sync') {
     e.waitUntil(
@@ -38,6 +37,41 @@ self.addEventListener('sync', (e) => {
       })
     )
   }
+})
+
+self.addEventListener('push', (e) => {
+  let data = { title: 'SAID Field', body: 'Update', url: '/' }
+  try {
+    if (e.data) data = { ...data, ...e.data.json() }
+  } catch {
+    try {
+      data.body = e.data?.text() || data.body
+    } catch {}
+  }
+  e.waitUntil(
+    self.registration.showNotification(data.title || 'SAID', {
+      body: data.body || '',
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+      data: { url: data.url || '/' },
+    })
+  )
+})
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close()
+  const url = e.notification.data?.url || '/'
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const c of clients) {
+        if ('focus' in c) {
+          c.navigate?.(url)
+          return c.focus()
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url)
+    })
+  )
 })
 
 self.addEventListener('message', (e) => {

@@ -13,6 +13,7 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
   const [techs, setTechs] = useState([])
   const [signer, setSigner] = useState('')
   const [busy, setBusy] = useState(false)
+  const [travel, setTravel] = useState(null)
   const canvasRef = useRef(null)
   const drawing = useRef(false)
   const fileRef = useRef(null)
@@ -59,7 +60,7 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
     try {
       const geo = await getPosition()
       if (!navigator.onLine) {
-        enqueue({ action: 'checkin', ticket_id: ticketId, body: { kind, ...geo } })
+        await enqueue({ action: 'checkin', ticket_id: ticketId, body: { kind, ...geo } })
         notify('Check-in queued offline')
         return
       }
@@ -214,7 +215,74 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
           Camera
           <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onPhoto} />
         </label>
+        <button
+          type="button"
+          className="btn-outline !text-xs"
+          disabled={busy}
+          onClick={async () => {
+            try {
+              const r = await api(`/api/v1/field/tickets/${ticketId}/travel`)
+              setTravel(r.data)
+              if (r.data.travel_minutes != null) {
+                notify(`~${r.data.travel_minutes} min · ${r.data.distance_km} km`)
+              } else if (r.data.reason) {
+                notify(r.data.reason)
+              }
+            } catch (e) {
+              notify(e.message, 'error')
+            }
+          }}
+        >
+          Travel ETA
+        </button>
+        <button
+          type="button"
+          className="btn-outline !text-xs"
+          onClick={async () => {
+            try {
+              if (!('Notification' in window)) return notify('Notifications not supported', 'error')
+              const perm = await Notification.requestPermission()
+              if (perm !== 'granted') return notify('Permission denied', 'error')
+              const reg = await navigator.serviceWorker?.ready
+              const vapid = await api('/api/v1/field/push/vapid-public')
+              let sub = null
+              if (reg?.pushManager && vapid.data?.publicKey) {
+                const key = urlBase64ToUint8Array(vapid.data.publicKey)
+                sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
+              } else if (reg?.pushManager) {
+                // no VAPID — store a placeholder endpoint via local notification test
+                new Notification('SAID Field', { body: 'Local notifications enabled for this device' })
+                notify('Local notifications on (set VAPID for web push)')
+                return
+              }
+              if (sub) {
+                const json = sub.toJSON()
+                await api('/api/v1/field/push/subscribe', {
+                  method: 'POST',
+                  body: { endpoint: json.endpoint, keys: json.keys },
+                })
+                notify('Push subscription saved')
+              }
+            } catch (e) {
+              notify(e.message || 'Push setup failed', 'error')
+            }
+          }}
+        >
+          Enable alerts
+        </button>
       </div>
+      {travel?.available && (
+        <div className="text-[10px] text-slate-500">
+          {travel.travel_minutes != null ? (
+            <>ETA ~{travel.travel_minutes} min · {travel.distance_km} km ·{' '}</>
+          ) : null}
+          {travel.maps_url && (
+            <a className="text-brand underline" href={travel.maps_url} target="_blank" rel="noreferrer">
+              Directions
+            </a>
+          )}
+        </div>
+      )}
 
       {!!checkins.length && (
         <ul className="text-[10px] text-slate-500 space-y-0.5 max-h-20 overflow-auto">
