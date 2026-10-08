@@ -155,6 +155,24 @@ export default function Money() {
             <button type="button" className="btn-outline !text-xs" onClick={() => downloadCsv('payments')}>
               Export payments CSV
             </button>
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                const ids = open.slice(0, 20).map((x) => x.id)
+                if (!ids.length) return notify('No open invoices')
+                if (!confirm(`Mark up to ${ids.length} open invoice(s) paid in full?`)) return
+                try {
+                  const r = await api('/api/v1/money/bulk-paid', { method: 'POST', body: { ids } })
+                  notify(`Marked ${r.data.updated} paid`)
+                  load()
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Bulk mark paid
+            </button>
             <button type="button" className="btn-outline !text-xs" onClick={() => downloadCsv('xero')}>
               Xero invoices CSV
             </button>

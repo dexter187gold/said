@@ -1251,3 +1251,30 @@ moneyRouter.get('/payments/:id/receipt', requireRole('staff'), (req, res) => {
     },
   })
 })
+
+
+moneyRouter.post('/bulk-paid', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z.object({ ids: z.array(z.string()).min(1).max(50) }).parse(req.body)
+    let n = 0
+    for (const id of body.ids) {
+      const inv = db.prepare(`SELECT * FROM invoices WHERE id = ?`).get(id)
+      if (!inv || inv.status === 'paid') continue
+      const bal = Number(inv.total) - Number(inv.amount_paid || 0)
+      if (bal <= 0) {
+        db.prepare(`UPDATE invoices SET status='paid', updated_at=? WHERE id=?`).run(now(), id)
+        n++
+        continue
+      }
+      db.prepare(`INSERT INTO payments (id, invoice_id, amount, method, date, note, created_at) VALUES (?,?,?,?,?,?,?)`).run(
+        uid(), id, bal, 'EFT', now().slice(0, 10), 'Bulk mark paid', now()
+      )
+      db.prepare(`UPDATE invoices SET amount_paid=?, status='paid', updated_at=? WHERE id=?`).run(inv.total, now(), id)
+      n++
+    }
+    audit(req.user.sub, 'money.bulk_paid', `count=${n}`, req.ip)
+    res.json({ data: { updated: n } })
+  } catch (e) {
+    next(e)
+  }
+})

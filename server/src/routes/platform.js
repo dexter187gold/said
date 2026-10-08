@@ -851,3 +851,17 @@ platformRouter.post('/webhooks/deliveries/purge', requireRole('admin'), (req, re
   audit(req.user.sub, 'webhook.deliveries_purge', `days=${days}:deleted=${r.changes}`, req.ip)
   res.json({ data: { deleted: r.changes, older_than_days: days } })
 })
+
+
+platformRouter.get('/login-history', requireRole('admin'), (req, res) => {
+  const limit = Math.min(100, Number(req.query.limit) || 40)
+  const rows = db
+    .prepare(
+      `SELECT a.*, u.email AS user_email, u.name AS user_name
+       FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+       WHERE a.action LIKE 'login%'
+       ORDER BY a.created_at DESC LIMIT ?`
+    )
+    .all(limit)
+  res.json({ data: rows })
+})

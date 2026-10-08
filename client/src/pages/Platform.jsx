@@ -26,6 +26,7 @@ export default function Platform() {
   const [userBranches, setUserBranches] = useState([])
   const [deliveries, setDeliveries] = useState([])
   const [secScore, setSecScore] = useState(null)
+  const [loginHistory, setLoginHistory] = useState([])
 
   const load = () => {
     api('/api/v1/platform/flags').then((r) => setFlags(r.data || [])).catch(() => {})
@@ -40,6 +41,7 @@ export default function Platform() {
       api('/api/v1/platform/backup/status').then((r) => setBackupStatus(r.data)).catch(() => {})
       api('/api/v1/platform/rate-limits').then((r) => setRateStats(r.data)).catch(() => {})
       api('/api/v1/platform/security-score').then((r) => setSecScore(r.data)).catch(() => {})
+      api('/api/v1/platform/login-history').then((r) => setLoginHistory(r.data || [])).catch(() => {})
       api('/api/v1/platform/users-branches').then((r) => setUserBranches(r.data || [])).catch(() => {})
     }
     api('/api/v1/platform/branches').then((r) => setBranches(r.data || [])).catch(() => {})
@@ -704,6 +706,17 @@ export default function Platform() {
           >
             Purge old deliveries (30d)
           </button>
+          <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
+            <div className="text-[10px] font-semibold uppercase text-slate-500 mb-1">Recent logins</div>
+            <ul className="text-[10px] space-y-0.5 max-h-32 overflow-auto">
+              {loginHistory.slice(0, 12).map((a) => (
+                <li key={a.id}>
+                  {(a.created_at || '').slice(0, 19)} · {a.user_email || a.user_name || '—'} · {a.action} · {a.ip || ''}
+                </li>
+              ))}
+              {!loginHistory.length && <li className="text-slate-500">No login events</li>}
+            </ul>
+          </div>
         </div>
       )}
 

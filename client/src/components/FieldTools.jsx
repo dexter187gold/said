@@ -6,6 +6,28 @@ import { enqueue } from '../lib/offlineQueue'
  * Hephaestus-Fire field tools for a ticket:
  * GPS check-in, camera photo, signature pad, multi-tech
  */
+async function compressImage(file, maxW = 1280, quality = 0.72) {
+  try {
+    const bitmap = await createImageBitmap(file)
+    const scale = Math.min(1, maxW / bitmap.width)
+    const w = Math.round(bitmap.width * scale)
+    const h = Math.round(bitmap.height * scale)
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    return canvas.toDataURL('image/jpeg', quality)
+  } catch {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(r.result)
+      r.onerror = reject
+      r.readAsDataURL(file)
+    })
+  }
+}
+
 export default function FieldTools({ ticketId, staff = [], notify, onChanged }) {
   const [checkins, setCheckins] = useState([])
   const [attachments, setAttachments] = useState([])
@@ -99,7 +121,7 @@ export default function FieldTools({ ticketId, staff = [], notify, onChanged }) 
     if (!file) return
     setBusy(true)
     try {
-      const data_url = await readFileAsDataUrl(file, 1280)
+      const data_url = await compressImage(file, 1280, 0.72)
       const geo = await getPosition()
       await api(`/api/v1/field/tickets/${ticketId}/attachments`, {
         method: 'POST',

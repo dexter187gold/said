@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS company (
   id TEXT PRIMARY KEY DEFAULT 'main', name TEXT, email TEXT, phone TEXT, vat_number TEXT, address TEXT,
   bank_name TEXT, account_number TEXT, branch_code TEXT, logo_url TEXT, website TEXT,
-  invoice_prefix TEXT DEFAULT 'INV', default_vat_rate REAL DEFAULT 15, currency TEXT DEFAULT 'ZAR',
+  invoice_prefix TEXT DEFAULT 'INV', default_vat_rate REAL DEFAULT 0, currency TEXT DEFAULT 'ZAR',
   business_type TEXT DEFAULT 'general', invoice_template_id TEXT DEFAULT 'tax_invoice_full',
   footer_note TEXT, terms_default TEXT
 );
@@ -163,7 +163,7 @@ for (const [col, def] of [
 const companyCols = db.prepare(`PRAGMA table_info(company)`).all().map((c) => c.name)
 for (const [col, def] of [
   ['logo_url', 'TEXT'], ['website', 'TEXT'], ['invoice_prefix', "TEXT DEFAULT 'INV'"],
-  ['default_vat_rate', 'REAL DEFAULT 15'], ['currency', "TEXT DEFAULT 'ZAR'"],
+  ['default_vat_rate', 'REAL DEFAULT 0'], ['currency', "TEXT DEFAULT 'ZAR'"],
   ['business_type', "TEXT DEFAULT 'general'"], ['invoice_template_id', "TEXT DEFAULT 'tax_invoice_full'"],
   ['footer_note', 'TEXT'], ['terms_default', 'TEXT'], ['setup_complete', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {

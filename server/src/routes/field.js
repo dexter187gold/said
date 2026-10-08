@@ -94,6 +94,7 @@ fieldRouter.get('/attachments/:id', (req, res) => {
  * Cap ~2.5MB text to keep SQLite sane
  */
 fieldRouter.post('/tickets/:id/attachments', requireRole('staff'), (req, res, next) => {
+  const MAX_PHOTO = 2_500_000 // ~2.5MB data URL
   try {
     const body = z
       .object({

@@ -48,7 +48,8 @@ const InvoiceBody = z.object({
   reminder_at: z.string().optional().nullable(),
   template_id: z.string().optional().nullable(),
   pricing_model: z.enum(['hourly', 'flatrate', 'adhoc']).optional().nullable(),
-  vat_rate: z.coerce.number().default(0.15),
+  vat_rate: z.coerce.number().min(0).max(1).default(0),
+  vat_enabled: z.boolean().optional().default(false),
   lines: z.array(Line).min(1),
 })
 
@@ -115,7 +116,8 @@ invoicesRouter.post('/', requireRole('staff'), (req, res, next) => {
 
     const body = InvoiceBody.parse(req.body)
     const exclusive = lineExclusive(body.lines)
-    const vat_amount = Math.round(exclusive * body.vat_rate * 100) / 100
+    const rate = body.vat_enabled === false ? 0 : (Number(body.vat_rate) || 0)
+    const vat_amount = Math.round(exclusive * rate * 100) / 100
     const total = Math.round((exclusive + vat_amount) * 100) / 100
     const id = uid()
     const number = nextNumber(body.doc_type || 'invoice')
@@ -157,7 +159,8 @@ invoicesRouter.put('/:id', requireRole('staff'), (req, res, next) => {
     const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id)
     if (!existing) return res.status(404).json({ error: true, message: 'Not found' })
     const exclusive = lineExclusive(body.lines)
-    const vat_amount = Math.round(exclusive * body.vat_rate * 100) / 100
+    const rate = body.vat_enabled === false ? 0 : (Number(body.vat_rate) || 0)
+    const vat_amount = Math.round(exclusive * rate * 100) / 100
     const total = Math.round((exclusive + vat_amount) * 100) / 100
     db.prepare(`UPDATE invoices SET client_id=?, date=?, due_date=?, status=?, notes=?, account_type=?, devices=?, service_type=?,
       po_number=?, payment_note=?, exclusive=?, vat_amount=?, total=?, reminder_at=?, updated_at=?, template_id=? WHERE id=?`).run(
@@ -282,6 +285,34 @@ invoicesRouter.post('/preview-layout', requireRole('staff'), (req, res, next) =>
     const fallbackHtml = `<html><body><h1>{{company_name}}</h1><p>{{number}} — {{client_name}}</p><table>{{lines_html}}</table><p>{{total}}</p></body></html>`
     const result = renderDocument({ templateId, instanceVars: instance, fallbackHtml })
     res.json({ data: result })
+  } catch (e) {
+    next(e)
+  }
+})
+
+
+invoicesRouter.post('/:id/duplicate', requireRole('staff'), (req, res, next) => {
+  try {
+    const src = loadInvoice(req.params.id)
+    if (!src) return res.status(404).json({ error: true, message: 'Not found' })
+    const id = uid()
+    const number = nextNumber(src.doc_type || 'invoice')
+    const date = now().slice(0, 10)
+    db.prepare(`INSERT INTO invoices (
+      id, number, client_id, date, due_date, status, notes, account_type, devices, service_type, po_number,
+      payment_note, exclusive, vat_amount, total, amount_paid, reminder_at, created_by, created_at, updated_at, doc_type, template_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)`).run(
+      id, number, src.client_id, date, src.due_date, 'unpaid',
+      src.notes, src.account_type, src.devices, src.service_type, src.po_number, src.payment_note,
+      src.exclusive, src.vat_amount, src.total, src.reminder_at, req.user.sub, now(), now(),
+      src.doc_type || 'invoice', src.template_id
+    )
+    try {
+      if (src.pricing_model) db.prepare(`UPDATE invoices SET pricing_model=? WHERE id=?`).run(src.pricing_model, id)
+    } catch {}
+    const insLine = db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,?)`)
+    for (const l of src.lines || []) insLine.run(uid(), id, l.description, l.qty, l.price, l.discount || 0)
+    res.status(201).json({ data: loadInvoice(id) })
   } catch (e) {
     next(e)
   }

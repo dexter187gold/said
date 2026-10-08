@@ -30,6 +30,8 @@ export default function InvoiceEdit() {
   const [lines, setLines] = useState([{ description: '', qty: 1, price: 0 }])
   const [snippets, setSnippets] = useState([])
   const [pricingModel, setPricingModel] = useState('flatrate')
+  const [vatEnabled, setVatEnabled] = useState(false)
+  const [vatRate, setVatRate] = useState(0.15)
   const [templateTouched, setTemplateTouched] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('EFT')
@@ -88,6 +90,11 @@ export default function InvoiceEdit() {
         setTemplateId(d.template_id || '')
         setAccountType(d.account_type || 'COD Account')
         if (d.pricing_model) setPricingModel(d.pricing_model)
+        if (Number(d.vat_amount) > 0.001) {
+          setVatEnabled(true)
+          const ex = Number(d.exclusive) || 0
+          if (ex > 0) setVatRate(Math.round((Number(d.vat_amount) / ex) * 1000) / 1000 || 0.15)
+        } else setVatEnabled(false)
         if (d.template_id) setTemplateTouched(true)
         setDueDate(d.due_date || '')
       })
@@ -96,9 +103,10 @@ export default function InvoiceEdit() {
 
   const totals = useMemo(() => {
     const exclusive = lines.reduce((s, l) => s + Number(l.qty || 0) * Number(l.price || 0), 0)
-    const vat = Math.round(exclusive * 0.15 * 100) / 100
+    const rate = vatEnabled ? Number(vatRate) || 0 : 0
+    const vat = Math.round(exclusive * rate * 100) / 100
     return { exclusive, vat, total: Math.round((exclusive + vat) * 100) / 100 }
-  }, [lines])
+  }, [lines, vatEnabled, vatRate])
 
   const body = () => ({
     client_id: clientId,
@@ -113,7 +121,8 @@ export default function InvoiceEdit() {
     service_type: serviceType,
     po_number: poNumber,
     payment_note: paymentNote,
-    vat_rate: 0.15,
+    vat_rate: vatEnabled ? Number(vatRate) || 0 : 0,
+    vat_enabled: vatEnabled,
     lines: lines.map((l) => ({ description: l.description, qty: Number(l.qty), price: Number(l.price) })),
   })
 
@@ -181,7 +190,7 @@ export default function InvoiceEdit() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-extrabold">{isNew ? `New ${typeLabel.toLowerCase()}` : (loaded?.number || typeLabel)}</h1>
-          <p className="text-sm text-slate-500">VAT 15% · {pathType}</p>
+          <p className="text-sm text-slate-500">{vatEnabled ? `VAT ${Math.round(vatRate * 100)}%` : "VAT off"} · {pathType}</p>
         </div>
         <div className="flex gap-2">
           <Link className="btn-outline" to={listPath}>Back</Link>
@@ -190,23 +199,52 @@ export default function InvoiceEdit() {
       </div>
 
       {!isNew && (
-        <DocumentActionBar
-          type={pathType}
-          id={id}
-          number={loaded?.number}
-          status={status}
-          onRefresh={(newId) => {
-            if (newId) nav(`/${pathType === 'invoice' ? 'invoices' : pathType === 'quote' ? 'quotes' : 'credits'}/${newId}`)
-            else window.location.reload()
-          }}
-          className="mb-4 rounded-xl border border-slate-200 dark:border-slate-700"
-        />
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn-outline !text-xs"
+            onClick={async () => {
+              try {
+                const r = await api(`/api/v1/invoices/${id}/duplicate`, { method: 'POST' })
+                notify('Duplicated')
+                nav(
+                  pathType === 'quote'
+                    ? `/quotes/${r.data.id}`
+                    : pathType === 'credit'
+                      ? `/credits/${r.data.id}`
+                      : `/invoices/${r.data.id}`
+                )
+              } catch (e) {
+                notify(e.message, 'error')
+              }
+            }}
+          >
+            Duplicate
+          </button>
+          <DocumentActionBar
+            type={pathType}
+            id={id}
+            number={loaded?.number}
+            status={status}
+            onRefresh={(newId) => {
+              if (newId)
+                nav(
+                  `/${pathType === 'invoice' ? 'invoices' : pathType === 'quote' ? 'quotes' : 'credits'}/${newId}`
+                )
+              else window.location.reload()
+            }}
+            className="rounded-xl border border-slate-200 dark:border-slate-700"
+          />
+        </div>
       )}
 
       <div className="mb-4 grid gap-3 sm:grid-cols-4">
         {[
           { k: 'Status', v: status },
           { k: 'Exclusive', v: `R ${totals.exclusive.toFixed(2)}` },
+          ...(vatEnabled
+            ? [{ k: `VAT ${Math.round(vatRate * 100)}%`, v: `R ${totals.vat.toFixed(2)}` }]
+            : []),
           { k: 'Total', v: `R ${totals.total.toFixed(2)}` },
           { k: 'Paid', v: `R ${Number(loaded?.amount_paid || 0).toFixed(2)}` },
         ].map((c) => (
@@ -228,6 +266,26 @@ export default function InvoiceEdit() {
           </div>
           <div>
             <label className="label">Layout template (layer 1)</label>
+            <div className="sm:col-span-2 flex flex-wrap items-end gap-3">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={vatEnabled}
+                  onChange={(e) => setVatEnabled(e.target.checked)}
+                />
+                <span>Include VAT</span>
+              </label>
+              {vatEnabled && (
+                <div>
+                  <label className="label">VAT rate</label>
+                  <select className="input !w-auto" value={String(vatRate)} onChange={(e) => setVatRate(Number(e.target.value))}>
+                    <option value="0.15">15% (SA standard)</option>
+                    <option value="0">0%</option>
+                    <option value="0.075">7.5%</option>
+                  </select>
+                </div>
+              )}
+            </div>
             <div className="sm:col-span-2">
               <label className="label">Pricing model</label>
               <select

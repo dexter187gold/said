@@ -21,7 +21,7 @@ export function getCompanyLayer() {
     company_branch: co.branch_code || '',
     company_logo: co.logo_url || '',
     currency: co.currency || 'ZAR',
-    default_vat_rate: co.default_vat_rate ?? 15,
+    default_vat_rate: co.default_vat_rate ?? 0,
     invoice_prefix: co.invoice_prefix || 'INV',
     footer_note: co.footer_note || '',
     terms_default: co.terms_default || '',
