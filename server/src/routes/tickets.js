@@ -9,6 +9,15 @@ import { buildJobCardHtml, buildJobCardWhatsApp, saPhoneToWa } from '../services
 export const ticketsRouter = Router()
 ticketsRouter.use(requireAuth)
 
+function userBranchId(userId) {
+  try {
+    return db.prepare(`SELECT branch_id FROM users WHERE id = ?`).get(userId)?.branch_id || null
+  } catch {
+    return null
+  }
+}
+
+
 const PartLine = z.object({
   name: z.string().min(1),
   qty: z.coerce.number().default(1),
@@ -56,7 +65,7 @@ function enrich(row) {
 }
 
 ticketsRouter.get('/', (req, res) => {
-  const { status, priority, category, q, assignee_id, warranty, template } = req.query
+  const { status, priority, category, q, assignee_id, warranty, template, branch_id } = req.query
   let sql = `SELECT t.*, c.name AS client_name, u.name AS assignee_name
     FROM tickets t
     LEFT JOIN clients c ON c.id = t.client_id
@@ -69,6 +78,7 @@ ticketsRouter.get('/', (req, res) => {
   if (category) { sql += ' AND t.category = ?'; params.push(category) }
   if (assignee_id) { sql += ' AND t.assignee_id = ?'; params.push(assignee_id) }
   if (warranty === '1') sql += ' AND t.warranty = 1'
+  if (branch_id) { sql += ' AND t.branch_id = ?'; params.push(branch_id) }
   if (q) {
     sql += ' AND (t.title LIKE ? OR t.description LIKE ? OR t.notes LIKE ? OR t.tags LIKE ?)'
     const like = `%${q}%`
@@ -204,6 +214,10 @@ ticketsRouter.post('/', requireRole('staff'), (req, res, next) => {
       body.warranty ? 1 : 0, body.sla_hours ?? null, sla_due_at,
       body.parts ? JSON.stringify(body.parts) : null, body.is_template ? 1 : 0
     )
+    const ub = userBranchId(req.user.sub)
+    if (ub) {
+      try { db.prepare(`UPDATE tickets SET branch_id=? WHERE id=? AND branch_id IS NULL`).run(ub, id) } catch {}
+    }
     res.status(201).json({ data: enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(id)) })
   } catch (e) { next(e) }
 })
@@ -269,6 +283,10 @@ ticketsRouter.post('/:id/clone', requireRole('staff'), (req, res, next) => {
       id, src.title, src.description, 'open', src.priority, src.category, src.tags, src.client_id, src.assignee_id,
       src.notes, null, src.estimated_minutes, req.user.sub, ts, ts, src.warranty || 0, src.sla_hours, sla_due_at, src.parts_json
     )
+    const ub = userBranchId(req.user.sub)
+    if (ub) {
+      try { db.prepare(`UPDATE tickets SET branch_id=? WHERE id=? AND branch_id IS NULL`).run(ub, id) } catch {}
+    }
     res.status(201).json({ data: enrich(db.prepare('SELECT * FROM tickets WHERE id = ?').get(id)) })
   } catch (e) { next(e) }
 })

@@ -40,6 +40,7 @@ export default function Tickets() {
   const [metrics, setMetrics] = useState(null)
   const [util, setUtil] = useState(null)
   const [clients, setClients] = useState([])
+  const [branches, setBranches] = useState([])
   const [staff, setStaff] = useState([])
   const [hourlyRate, setHourlyRate] = useState(450)
   const [selected, setSelected] = useState(null)
@@ -51,8 +52,8 @@ export default function Tickets() {
   const [manualMin, setManualMin] = useState('')
   const [view, setView] = useState('table')
   const [filter, setFilter] = useState(() => {
-    try { return { status: '', priority: '', category: '', q: '', assignee_id: '', warranty: '', ...JSON.parse(localStorage.getItem(FILTER_KEY) || '{}') } }
-    catch { return { status: '', priority: '', category: '', q: '', assignee_id: '', warranty: '' } }
+    try { return { status: '', priority: '', category: '', q: '', assignee_id: '', warranty: '', branch_id: '', ...JSON.parse(localStorage.getItem(FILTER_KEY) || '{}') } }
+    catch { return { status: '', priority: '', category: '', q: '', assignee_id: '', warranty: '', branch_id: '' } }
   })
   const [liveTimer, setLiveTimer] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -83,6 +84,7 @@ export default function Tickets() {
     if (filter.category) params.set('category', filter.category)
     if (filter.assignee_id) params.set('assignee_id', filter.assignee_id)
     if (filter.warranty === '1') params.set('warranty', '1')
+    if (filter.branch_id) params.set('branch_id', filter.branch_id)
     if (filter.q) params.set('q', filter.q)
     const qs = params.toString() ? `?${params}` : ''
     return api(`/api/v1/tickets${qs}`).then((r) => setList(r.data || [])).catch((e) => notify(e.message, 'error'))
@@ -95,10 +97,11 @@ export default function Tickets() {
   useEffect(() => {
     try { localStorage.setItem(FILTER_KEY, JSON.stringify(filter)) } catch {}
     loadList(); loadMetrics()
-  }, [filter.status, filter.priority, filter.category, filter.assignee_id, filter.warranty])
+  }, [filter.status, filter.priority, filter.category, filter.assignee_id, filter.warranty, filter.branch_id])
 
   useEffect(() => {
     api('/api/v1/clients').then((r) => setClients(r.data || [])).catch(() => {})
+    api('/api/v1/platform/branches').then((r) => setBranches(r.data || [])).catch(() => {})
     api('/api/v1/tickets/staff').then((r) => setStaff(r.data || [])).catch(() => {})
     api('/api/v1/settings').then((r) => { const hr = r.data?.settings?.hourly_rate; if (hr != null) setHourlyRate(Number(hr) || 450) }).catch(() => {})
   }, [])
@@ -306,6 +309,12 @@ export default function Tickets() {
         <select className="input max-w-[120px]" value={filter.category || ''} onChange={(e) => setFilter({ ...filter, category: e.target.value })}><option value="">Category</option>{CATS.map((s) => <option key={s} value={s}>{s}</option>)}</select>
         <select className="input max-w-[140px]" value={filter.assignee_id || ''} onChange={(e) => setFilter({ ...filter, assignee_id: e.target.value })}><option value="">All techs</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
         <select className="input max-w-[110px]" value={filter.warranty || ''} onChange={(e) => setFilter({ ...filter, warranty: e.target.value })}><option value="">Warranty</option><option value="1">Warranty only</option></select>
+        {branches.length > 0 && (
+          <select className="input max-w-[140px]" value={filter.branch_id || ''} onChange={(e) => setFilter({ ...filter, branch_id: e.target.value })}>
+            <option value="">All branches</option>
+            {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        )}
         <button type="button" className="btn-outline" onClick={loadList}>Refresh</button>
         {selectedIds.length > 0 && (
           <div className="flex flex-wrap items-center gap-1">

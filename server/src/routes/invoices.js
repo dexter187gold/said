@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { db, uid, now } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { htmlToPdf } from '../services/pdf.js'
+import { emitWebhook } from '../services/webhooks.js'
 import { mountInvoiceExtras } from './invoiceExtras.js'
 import {
   getDefaultTemplateId,
@@ -13,6 +14,15 @@ import {
 
 export const invoicesRouter = Router()
 invoicesRouter.use(requireAuth)
+
+function userBranchId(userId) {
+  try {
+    return db.prepare(`SELECT branch_id FROM users WHERE id = ?`).get(userId)?.branch_id || null
+  } catch {
+    return null
+  }
+}
+
 
 const Line = z.object({
   description: z.string().min(1),
@@ -73,10 +83,11 @@ function lineExclusive(lines) {
 }
 
 invoicesRouter.get('/', (req, res) => {
-  const { status, type } = req.query
+  const { status, type, branch_id } = req.query
   const clauses = []
   const params = []
   if (type) { clauses.push('i.doc_type = ?'); params.push(type) }
+  if (branch_id) { clauses.push('i.branch_id = ?'); params.push(branch_id) }
   else { clauses.push("i.doc_type = 'invoice'") }
   if (status) { clauses.push('i.status = ?'); params.push(status) }
   const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''
@@ -113,6 +124,10 @@ invoicesRouter.post('/', requireRole('staff'), (req, res, next) => {
     )
     const insLine = db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price, discount) VALUES (?,?,?,?,?,?)`)
     for (const l of body.lines) insLine.run(uid(), id, l.description, l.qty, l.price, l.discount || 0)
+    const ub = userBranchId(req.user.sub)
+    if (ub) {
+      try { db.prepare(`UPDATE invoices SET branch_id=? WHERE id=? AND (branch_id IS NULL OR branch_id='')`).run(ub, id) } catch {}
+    }
     res.status(201).json({ data: loadInvoice(id) })
   } catch (e) { next(e) }
 })
@@ -152,6 +167,13 @@ invoicesRouter.post('/:id/payments', requireRole('staff'), (req, res, next) => {
     if (paid >= inv.total) status = 'paid'
     else if (paid > 0) status = 'partial'
     db.prepare('UPDATE invoices SET amount_paid=?, status=?, updated_at=? WHERE id=?').run(paid, status, now(), req.params.id)
+    emitWebhook(status === 'paid' ? 'invoice.paid' : 'invoice.payment', {
+      invoice_id: inv.id,
+      number: inv.number,
+      amount: body.amount,
+      status,
+      amount_paid: paid,
+    }).catch(() => {})
     res.status(201).json({ data: loadInvoice(req.params.id) })
   } catch (e) { next(e) }
 })

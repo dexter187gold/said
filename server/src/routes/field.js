@@ -6,6 +6,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { db, uid, now, audit } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
+import { emitWebhook } from '../services/webhooks.js'
 
 export const fieldRouter = Router()
 fieldRouter.use(requireAuth)
@@ -705,6 +706,11 @@ fieldRouter.post('/tickets/:id/close', requireRole('staff'), (req, res, next) =>
     }
     audit(req.user.sub, 'field.close', `${req.params.id}:${body.status}`, req.ip)
     const row = db.prepare(`SELECT * FROM tickets WHERE id = ?`).get(req.params.id)
+    emitWebhook('ticket.closed', {
+      ticket_id: req.params.id,
+      title: row?.title,
+      status: body.status,
+    }).catch(() => {})
     res.json({ data: row })
   } catch (e) {
     next(e)

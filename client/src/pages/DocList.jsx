@@ -61,6 +61,8 @@ export default function DocList({ docType = 'invoice' }) {
   const [q, setQ] = useState('')
   const [sort, setSort] = useState('date_desc')
   const [loading, setLoading] = useState(true)
+  const [branchId, setBranchId] = useState('')
+  const [branches, setBranches] = useState([])
 
   const statusOpts = docType === 'quote' ? QUOTE_STATUSES : INVOICE_STATUSES
 
@@ -68,6 +70,7 @@ export default function DocList({ docType = 'invoice' }) {
     setLoading(true)
     const params = new URLSearchParams({ type: cfg.type })
     if (status) params.set('status', status)
+    if (branchId) params.set('branch_id', branchId)
     api(`/api/v1/invoices?${params}`)
       .then((r) => setList(r.data || []))
       .catch((e) => notify(e.message, 'error'))
@@ -75,8 +78,12 @@ export default function DocList({ docType = 'invoice' }) {
   }
 
   useEffect(() => {
+    api('/api/v1/platform/branches').then((r) => setBranches(r.data || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     load()
-  }, [status, docType])
+  }, [status, docType, branchId])
 
   const filtered = useMemo(() => {
     let rows = [...list]
@@ -138,6 +145,21 @@ export default function DocList({ docType = 'invoice' }) {
             </option>
           ))}
         </select>
+        {branches.length > 0 && (
+          <select
+            className="input !w-auto !py-1.5 !text-xs"
+            value={branchId}
+            onChange={(e) => setBranchId(e.target.value)}
+            aria-label="Filter by branch"
+          >
+            <option value="">All branches</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           className="input !w-auto !py-1.5 !text-xs"
           value={sort}

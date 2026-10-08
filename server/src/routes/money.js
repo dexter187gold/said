@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { db, uid, now, audit } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { sendAppEmail } from '../services/mail.js'
+import { emitWebhook } from '../services/webhooks.js'
 import crypto from 'crypto'
 
 export const moneyRouter = Router()
@@ -261,6 +262,13 @@ moneyRouter.post('/invoices/:id/pay', requireRole('staff'), (req, res, next) => 
     else if (paid > 0) status = 'partial'
     db.prepare(`UPDATE invoices SET amount_paid=?, status=?, updated_at=? WHERE id=?`).run(paid, status, now(), req.params.id)
     audit(req.user.sub, 'payment.record', `${inv.number}:${body.amount}`, req.ip)
+    emitWebhook('invoice.paid', {
+      invoice_id: inv.id,
+      number: inv.number,
+      amount: body.amount,
+      status,
+      amount_paid: paid,
+    }).catch(() => {})
     res.status(201).json({
       data: {
         amount_paid: paid,
