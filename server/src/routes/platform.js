@@ -276,3 +276,281 @@ platformRouter.get('/popia/summary', requireRole('admin'), (_req, res) => {
     },
   })
 })
+
+/* ─── Hestia-Earth: retention, backups, webhooks, session revoke, monitoring ─── */
+
+try {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS webhooks (
+  id TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  events TEXT NOT NULL,
+  secret TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id TEXT PRIMARY KEY,
+  webhook_id TEXT NOT NULL,
+  event TEXT NOT NULL,
+  status_code INTEGER,
+  ok INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS retention_policies (
+  key TEXT PRIMARY KEY,
+  days INTEGER NOT NULL,
+  description TEXT,
+  updated_at TEXT
+);
+`)
+  const policies = [
+    ['audit_log', 365, 'Audit log retention days'],
+    ['otp_codes', 7, 'OTP codes retention'],
+    ['payfast_itn_log', 90, 'PayFast ITN log retention'],
+    ['offline_queue_log', 30, 'Offline sync log retention'],
+    ['document_renders', 180, 'Document render history'],
+  ]
+  const pins = db.prepare(
+    `INSERT OR IGNORE INTO retention_policies (key, days, description, updated_at) VALUES (?,?,?,?)`
+  )
+  const ts = now()
+  for (const [k, d, desc] of policies) pins.run(k, d, desc, ts)
+} catch (e) {
+  console.warn('hestia tables', e.message)
+}
+
+/** Revoke one session */
+platformRouter.post('/sessions/:id/revoke', (req, res) => {
+  const row = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(req.params.id)
+  if (!row) return res.status(404).json({ error: true, message: 'Not found' })
+  if (req.user.role !== 'admin' && row.user_id !== req.user.sub) {
+    return res.status(403).json({ error: true, message: 'Forbidden' })
+  }
+  db.prepare(`UPDATE sessions SET revoked_at=? WHERE id=?`).run(now(), req.params.id)
+  audit(req.user.sub, 'session.revoke', req.params.id, req.ip)
+  res.json({ data: { ok: true } })
+})
+
+/** Retention policies */
+platformRouter.get('/retention', requireRole('admin'), (_req, res) => {
+  res.json({ data: db.prepare(`SELECT * FROM retention_policies ORDER BY key`).all() })
+})
+
+platformRouter.put('/retention/:key', requireRole('admin'), (req, res, next) => {
+  try {
+    const days = z.coerce.number().int().min(1).max(3650).parse(req.body?.days)
+    const ex = db.prepare(`SELECT * FROM retention_policies WHERE key = ?`).get(req.params.key)
+    if (!ex) return res.status(404).json({ error: true, message: 'Unknown policy' })
+    db.prepare(`UPDATE retention_policies SET days=?, updated_at=? WHERE key=?`).run(days, now(), req.params.key)
+    audit(req.user.sub, 'retention.update', `${req.params.key}:${days}`, req.ip)
+    res.json({ data: db.prepare(`SELECT * FROM retention_policies WHERE key = ?`).get(req.params.key) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+/** Run retention purge (admin) */
+platformRouter.post('/retention/purge', requireRole('admin'), (req, res) => {
+  const policies = db.prepare(`SELECT * FROM retention_policies`).all()
+  const results = {}
+  for (const p of policies) {
+    const cutoff = new Date(Date.now() - p.days * 86400000).toISOString()
+    try {
+      if (p.key === 'audit_log') {
+        results.audit_log = db.prepare(`DELETE FROM audit_log WHERE created_at < ?`).run(cutoff).changes
+      } else if (p.key === 'otp_codes') {
+        try {
+          results.otp_codes = db.prepare(`DELETE FROM otp_codes WHERE created_at < ?`).run(cutoff).changes
+        } catch {
+          results.otp_codes = 0
+        }
+      } else if (p.key === 'payfast_itn_log') {
+        try {
+          results.payfast_itn_log = db.prepare(`DELETE FROM payfast_itn_log WHERE created_at < ?`).run(cutoff).changes
+        } catch {
+          results.payfast_itn_log = 0
+        }
+      } else if (p.key === 'offline_queue_log') {
+        try {
+          results.offline_queue_log = db.prepare(`DELETE FROM offline_queue_log WHERE created_at < ?`).run(cutoff).changes
+        } catch {
+          results.offline_queue_log = 0
+        }
+      } else if (p.key === 'document_renders') {
+        try {
+          results.document_renders = db.prepare(`DELETE FROM document_renders WHERE created_at < ?`).run(cutoff).changes
+        } catch {
+          results.document_renders = 0
+        }
+      }
+    } catch (e) {
+      results[p.key] = `error: ${e.message}`
+    }
+  }
+  audit(req.user.sub, 'retention.purge', JSON.stringify(results).slice(0, 200), req.ip)
+  res.json({ data: { purged: results, at: now() } })
+})
+
+/** Backup snapshot — JSON export of core tables (admin) */
+platformRouter.get('/backup', requireRole('admin'), (_req, res) => {
+  const tables = [
+    'company',
+    'users',
+    'clients',
+    'invoices',
+    'invoice_lines',
+    'payments',
+    'tickets',
+    'ticket_comments',
+    'settings',
+    'document_templates',
+    'branches',
+    'feature_flags',
+  ]
+  const snapshot = { exported_at: now(), version: 'hestia', tables: {} }
+  for (const table of tables) {
+    try {
+      snapshot.tables[table] = db.prepare(`SELECT * FROM ${table}`).all()
+    } catch {
+      snapshot.tables[table] = []
+    }
+  }
+  // strip password hashes from users export for safety note — still include for restore
+  audit(_req.user?.sub || 'admin', 'backup.export', `tables=${tables.length}`, _req.ip)
+  res.setHeader('Content-Type', 'application/json')
+  res.setHeader('Content-Disposition', `attachment; filename="said-backup-${now().slice(0, 10)}.json"`)
+  res.send(JSON.stringify(snapshot, null, 2))
+})
+
+/** Backup metadata only (counts) */
+platformRouter.get('/backup/status', requireRole('admin'), (_req, res) => {
+  const counts = {}
+  for (const t of ['clients', 'invoices', 'tickets', 'payments', 'users', 'audit_log']) {
+    try {
+      counts[t] = db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get().c
+    } catch {
+      counts[t] = 0
+    }
+  }
+  res.json({ data: { counts, at: now() } })
+})
+
+/** Webhooks CRUD */
+platformRouter.get('/webhooks', requireRole('admin'), (_req, res) => {
+  res.json({
+    data: db.prepare(`SELECT id, url, events, active, created_at FROM webhooks ORDER BY created_at DESC`).all(),
+  })
+})
+
+platformRouter.post('/webhooks', requireRole('admin'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        url: z.string().url(),
+        events: z.string().min(1), // comma-separated: invoice.paid,ticket.closed
+        secret: z.string().optional().nullable(),
+      })
+      .parse(req.body)
+    const id = uid()
+    db.prepare(
+      `INSERT INTO webhooks (id, url, events, secret, active, created_at) VALUES (?,?,?,?,1,?)`
+    ).run(id, body.url, body.events, body.secret || null, now())
+    audit(req.user.sub, 'webhook.create', body.url, req.ip)
+    res.status(201).json({ data: { id, url: body.url, events: body.events } })
+  } catch (e) {
+    next(e)
+  }
+})
+
+platformRouter.delete('/webhooks/:id', requireRole('admin'), (req, res) => {
+  db.prepare(`DELETE FROM webhooks WHERE id = ?`).run(req.params.id)
+  audit(req.user.sub, 'webhook.delete', req.params.id, req.ip)
+  res.json({ data: { ok: true } })
+})
+
+/** Dispatch webhook event (internal + test) */
+platformRouter.post('/webhooks/test', requireRole('admin'), async (req, res) => {
+  const event = req.body?.event || 'test.ping'
+  const hooks = db.prepare(`SELECT * FROM webhooks WHERE active=1`).all()
+  const results = []
+  for (const h of hooks) {
+    const events = String(h.events || '').split(',').map((s) => s.trim())
+    if (!events.includes('*') && !events.includes(event) && event !== 'test.ping') {
+      continue
+    }
+    let ok = 0
+    let status_code = 0
+    try {
+      const r = await fetch(h.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-SAID-Event': event,
+          'X-SAID-Signature': h.secret || '',
+        },
+        body: JSON.stringify({
+          event,
+          at: now(),
+          data: req.body?.data || { ping: true },
+        }),
+        signal: AbortSignal.timeout(8000),
+      })
+      status_code = r.status
+      ok = r.ok ? 1 : 0
+    } catch (e) {
+      status_code = 0
+      ok = 0
+    }
+    db.prepare(
+      `INSERT INTO webhook_deliveries (id, webhook_id, event, status_code, ok, created_at) VALUES (?,?,?,?,?,?)`
+    ).run(uid(), h.id, event, status_code, ok, now())
+    results.push({ webhook_id: h.id, url: h.url, status_code, ok: !!ok })
+  }
+  res.json({ data: { event, results } })
+})
+
+platformRouter.get('/webhooks/deliveries', requireRole('admin'), (req, res) => {
+  const limit = Math.min(100, Number(req.query.limit) || 30)
+  res.json({
+    data: db
+      .prepare(`SELECT * FROM webhook_deliveries ORDER BY created_at DESC LIMIT ?`)
+      .all(limit),
+  })
+})
+
+/** POPIA: anonymise / delete client personal data (admin) */
+platformRouter.post('/popia/forget-client/:id', requireRole('admin'), (req, res) => {
+  const c = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(req.params.id)
+  if (!c) return res.status(404).json({ error: true, message: 'Not found' })
+  db.prepare(
+    `UPDATE clients SET name=?, email=NULL, phone=NULL, address=NULL, notes=NULL, vat_number=NULL WHERE id=?`
+  ).run(`Redacted ${req.params.id.slice(0, 8)}`, req.params.id)
+  audit(req.user.sub, 'popia.forget_client', req.params.id, req.ip)
+  res.json({ data: { ok: true, client_id: req.params.id } })
+})
+
+/** Monitoring snapshot */
+platformRouter.get('/health-detail', requireRole('admin'), (_req, res) => {
+  const detail = {
+    at: now(),
+    users: db.prepare(`SELECT COUNT(*) AS c FROM users`).get().c,
+    open_tickets: db
+      .prepare(`SELECT COUNT(*) AS c FROM tickets WHERE status IN ('open','in_progress','waiting')`)
+      .get().c,
+    unpaid_invoices: db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM invoices WHERE COALESCE(doc_type,'invoice')='invoice' AND status IN ('unpaid','partial','overdue')`
+      )
+      .get().c,
+    audit_24h: db
+      .prepare(`SELECT COUNT(*) AS c FROM audit_log WHERE created_at > ?`)
+      .get(new Date(Date.now() - 86400000).toISOString()).c,
+    api_keys_active: db.prepare(`SELECT COUNT(*) AS c FROM api_keys WHERE revoked=0`).get().c,
+    webhooks_active: db.prepare(`SELECT COUNT(*) AS c FROM webhooks WHERE active=1`).get().c,
+    sessions_active: db
+      .prepare(`SELECT COUNT(*) AS c FROM sessions WHERE revoked_at IS NULL`)
+      .get().c,
+  }
+  res.json({ data: detail })
+})

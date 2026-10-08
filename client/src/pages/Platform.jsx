@@ -15,6 +15,13 @@ export default function Platform() {
   const [branchName, setBranchName] = useState('')
   const [keyName, setKeyName] = useState('')
   const [popia, setPopia] = useState(null)
+  const [retention, setRetention] = useState([])
+  const [webhooks, setWebhooks] = useState([])
+  const [health, setHealth] = useState(null)
+  const [backupStatus, setBackupStatus] = useState(null)
+  const [hookUrl, setHookUrl] = useState('')
+  const [hookEvents, setHookEvents] = useState('invoice.paid,ticket.closed')
+  const [sessions, setSessions] = useState([])
 
   const load = () => {
     api('/api/v1/platform/flags').then((r) => setFlags(r.data || [])).catch(() => {})
@@ -22,8 +29,13 @@ export default function Platform() {
       api('/api/v1/platform/audit?limit=80').then((r) => setAudit(r.data || [])).catch(() => {})
       api('/api/v1/platform/api-keys').then((r) => setKeys(r.data || [])).catch(() => {})
       api('/api/v1/platform/popia/summary').then((r) => setPopia(r.data)).catch(() => {})
+      api('/api/v1/platform/retention').then((r) => setRetention(r.data || [])).catch(() => {})
+      api('/api/v1/platform/webhooks').then((r) => setWebhooks(r.data || [])).catch(() => {})
+      api('/api/v1/platform/health-detail').then((r) => setHealth(r.data)).catch(() => {})
+      api('/api/v1/platform/backup/status').then((r) => setBackupStatus(r.data)).catch(() => {})
     }
     api('/api/v1/platform/branches').then((r) => setBranches(r.data || [])).catch(() => {})
+    api('/api/v1/platform/sessions').then((r) => setSessions(r.data || [])).catch(() => {})
   }
 
   useEffect(() => {
@@ -81,15 +93,20 @@ export default function Platform() {
     { id: 'audit', label: 'Audit log' },
     { id: 'keys', label: 'API keys' },
     { id: 'branches', label: 'Branches' },
+    { id: 'sessions', label: 'Sessions' },
+    { id: 'retention', label: 'Retention' },
+    { id: 'backup', label: 'Backup' },
+    { id: 'webhooks', label: 'Webhooks' },
     { id: 'popia', label: 'POPIA' },
+    { id: 'monitor', label: 'Monitor' },
   ]
 
   return (
     <div className="space-y-3">
       <PageHeader
         title="Platform & trust"
-        subtitle="EA-Q4 · flags · audit · API keys · branches · POPIA"
-        meta={[user?.role, `v1.8 Q4`]}
+        subtitle="Hestia-Earth · trust · retention · backup · webhooks · sessions"
+        meta={[user?.role, "v2.1 hestia"]}
       />
 
       <div className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-700 pb-2">
@@ -246,6 +263,230 @@ export default function Platform() {
           )}
         </div>
       )}
+
+      {tab === 'sessions' && (
+        <div className="card p-3 space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                try {
+                  await api('/api/v1/platform/sessions/revoke-all', { method: 'POST' })
+                  notify('All your sessions revoked')
+                  load()
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Revoke all my sessions
+            </button>
+          </div>
+          <ul className="text-xs space-y-1 max-h-80 overflow-auto">
+            {(sessions || []).map((s) => (
+              <li key={s.id} className="flex justify-between gap-2 border-b border-slate-100 dark:border-slate-800 py-1">
+                <span className="truncate">
+                  {(s.created_at || '').slice(0, 19)} · {s.ip || '—'} · {(s.user_agent || '').slice(0, 40)}
+                  {s.revoked_at ? ' · revoked' : ''}
+                </span>
+                {!s.revoked_at && (
+                  <button
+                    type="button"
+                    className="btn-outline !text-[10px] !py-0.5 shrink-0"
+                    onClick={async () => {
+                      try {
+                        await api(`/api/v1/platform/sessions/${s.id}/revoke`, { method: 'POST' })
+                        notify('Session revoked')
+                        load()
+                      } catch (e) {
+                        notify(e.message, 'error')
+                      }
+                    }}
+                  >
+                    Revoke
+                  </button>
+                )}
+              </li>
+            ))}
+            {!sessions?.length && <li className="text-slate-500">No sessions listed</li>}
+          </ul>
+        </div>
+      )}
+
+      {tab === 'retention' && isAdmin && (
+        <div className="card p-3 space-y-3">
+          <p className="text-xs text-slate-500">How long operational logs are kept. Purge deletes older rows.</p>
+          <ul className="space-y-2">
+            {retention.map((r) => (
+              <li key={r.key} className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium min-w-[140px]">{r.key}</span>
+                <input
+                  className="input !w-20 !text-xs"
+                  type="number"
+                  defaultValue={r.days}
+                  id={`ret-${r.key}`}
+                />
+                <span className="text-xs text-slate-500">days</span>
+                <button
+                  type="button"
+                  className="btn-outline !text-[10px]"
+                  onClick={async () => {
+                    const el = document.getElementById(`ret-${r.key}`)
+                    try {
+                      await api(`/api/v1/platform/retention/${r.key}`, {
+                        method: 'PUT',
+                        body: { days: Number(el?.value || r.days) },
+                      })
+                      notify('Policy updated')
+                      load()
+                    } catch (e) {
+                      notify(e.message, 'error')
+                    }
+                  }}
+                >
+                  Save
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="btn-primary !text-xs"
+            onClick={async () => {
+              if (!confirm('Purge data older than retention policies?')) return
+              try {
+                const r = await api('/api/v1/platform/retention/purge', { method: 'POST' })
+                notify(`Purged: ${JSON.stringify(r.data.purged)}`)
+              } catch (e) {
+                notify(e.message, 'error')
+              }
+            }}
+          >
+            Run purge now
+          </button>
+        </div>
+      )}
+
+      {tab === 'backup' && isAdmin && (
+        <div className="card p-3 space-y-3">
+          <p className="text-xs text-slate-500">Download a JSON snapshot of core tables for off-site storage.</p>
+          {backupStatus?.counts && (
+            <ul className="text-xs grid grid-cols-2 sm:grid-cols-3 gap-1">
+              {Object.entries(backupStatus.counts).map(([k, v]) => (
+                <li key={k}>
+                  {k}: <strong>{v}</strong>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button
+            type="button"
+            className="btn-primary !text-xs"
+            onClick={async () => {
+              try {
+                const token = localStorage.getItem('said_token')
+                const res = await fetch('/api/v1/platform/backup', {
+                  headers: token ? { Authorization: `Bearer ${token}` } : {},
+                })
+                if (!res.ok) throw new Error('Backup failed')
+                const blob = await res.blob()
+                const a = document.createElement('a')
+                a.href = URL.createObjectURL(blob)
+                a.download = `said-backup-${new Date().toISOString().slice(0, 10)}.json`
+                a.click()
+                notify('Backup downloaded')
+              } catch (e) {
+                notify(e.message, 'error')
+              }
+            }}
+          >
+            Download backup JSON
+          </button>
+        </div>
+      )}
+
+      {tab === 'webhooks' && isAdmin && (
+        <div className="card p-3 space-y-3">
+          <p className="text-xs text-slate-500">POST JSON to your URL on events (invoice.paid, ticket.closed, or *).</p>
+          <div className="flex flex-wrap gap-2">
+            <input className="input flex-1 min-w-[180px]" placeholder="https://hooks.example/said" value={hookUrl} onChange={(e) => setHookUrl(e.target.value)} />
+            <input className="input flex-1 min-w-[140px]" placeholder="events" value={hookEvents} onChange={(e) => setHookEvents(e.target.value)} />
+            <button
+              type="button"
+              className="btn-primary !text-xs"
+              onClick={async () => {
+                try {
+                  await api('/api/v1/platform/webhooks', {
+                    method: 'POST',
+                    body: { url: hookUrl, events: hookEvents },
+                  })
+                  setHookUrl('')
+                  notify('Webhook added')
+                  load()
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                try {
+                  const r = await api('/api/v1/platform/webhooks/test', { method: 'POST', body: { event: 'test.ping' } })
+                  notify(`Test sent to ${r.data.results?.length || 0} hook(s)`)
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Test ping
+            </button>
+          </div>
+          <ul className="text-xs space-y-1">
+            {webhooks.map((w) => (
+              <li key={w.id} className="flex justify-between gap-2">
+                <span className="truncate">
+                  {w.url} · {w.events}
+                </span>
+                <button
+                  type="button"
+                  className="btn-outline !text-[10px] !py-0.5"
+                  onClick={async () => {
+                    await api(`/api/v1/platform/webhooks/${w.id}`, { method: 'DELETE' })
+                    load()
+                  }}
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {tab === 'monitor' && isAdmin && (
+        <div className="card p-3">
+          {!health ? (
+            <p className="text-xs text-slate-500">Loading…</p>
+          ) : (
+            <ul className="text-sm grid gap-2 sm:grid-cols-2">
+              <li>Users: <strong>{health.users}</strong></li>
+              <li>Open tickets: <strong>{health.open_tickets}</strong></li>
+              <li>Unpaid invoices: <strong>{health.unpaid_invoices}</strong></li>
+              <li>Audit (24h): <strong>{health.audit_24h}</strong></li>
+              <li>API keys: <strong>{health.api_keys_active}</strong></li>
+              <li>Webhooks: <strong>{health.webhooks_active}</strong></li>
+              <li>Active sessions: <strong>{health.sessions_active}</strong></li>
+              <li className="text-xs text-slate-500 sm:col-span-2">As of {health.at}</li>
+            </ul>
+          )}
+        </div>
+      )}
+
     </div>
   )
 }

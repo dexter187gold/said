@@ -78,3 +78,5 @@ Ship **one big integrated commit** when possible (this cycle’s job-card + PDF 
 - **2026-10-08 Athena-Wood craft batch:** empty/skeleton UI, DocList filters+search+a11y, quote defaults (hourly/flat/ad-hoc), account type dropdown, quote page-settings, trust WhatsApp for quotes/invoices, template reseed for COD layouts, Clients empty state.
 
 - **2026-10-08 Hephaestus-Fire field batch:** GPS check-in/out, camera attachments, signature pad, multi-tech, utilisation, offline queue + SW v16, field API `/api/v1/field`.
+
+- **2026-10-08 Hestia-Earth trust batch:** session revoke, retention policies + purge, JSON backup export, webhooks + test ping, POPIA forget-client, health-detail monitor.
