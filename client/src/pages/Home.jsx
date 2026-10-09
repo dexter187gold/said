@@ -69,7 +69,13 @@ export default function Home() {
   const [d, setD] = useState(null)
   const [busy, setBusy] = useState(null)
 
-  const load = () => api('/api/v1/settings/dashboard').then((r) => setD(r.data)).catch(() => {})
+  const [apollo, setApollo] = useState(null)
+  const [artemisToday, setArtemisToday] = useState(null)
+  const load = () => {
+    api('/api/v1/settings/dashboard').then((r) => setD(r.data)).catch(() => {})
+    api('/api/v1/apollo/kpis').then((r) => setApollo(r.data)).catch(() => {})
+    api('/api/v1/artemis/today').then((r) => setArtemisToday(r.data)).catch(() => {})
+  }
 
   useEffect(() => {
     load()

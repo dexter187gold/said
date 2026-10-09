@@ -15,6 +15,8 @@ import { pagePrefsRouter } from './routes/pagePrefs.js'
 import { documentActionsRouter } from './routes/documentActions.js'
 import { insightRouter } from './routes/insight.js'
 import { platformRouter } from './routes/platform.js'
+import { apolloRouter } from './routes/apollo.js'
+import { artemisRouter } from './routes/artemis.js'
 import { portalRouter } from './routes/portal.js'
 import { moneyRouter, handlePayfastItn, runDueRetainers } from './routes/money.js'
 import { fieldRouter } from './routes/field.js'
@@ -49,7 +51,7 @@ app.get('/api/v1/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'said',
-    version: '2.6.2-mythos-quad',
+    version: '2.7.0-apollo-artemis',
     templates: tplCount,
     time: new Date().toISOString(),
   })
@@ -85,6 +87,8 @@ app.use('/api/v1/settings', settingsRouter)
 app.use('/api/v1/page-prefs', pagePrefsRouter)
 app.use('/api/v1/doc-actions', documentActionsRouter)
 app.use('/api/v1/insight', insightRouter)
+app.use('/api/v1/apollo', apolloRouter)
+app.use('/api/v1/artemis', artemisRouter)
 app.use('/api/v1/platform', platformRouter)
 app.use('/api/v1/portal', portalRouter)
 app.post('/api/v1/money/payfast/itn', handlePayfastItn)

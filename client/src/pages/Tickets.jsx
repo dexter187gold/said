@@ -428,6 +428,22 @@ export default function Tickets() {
               className="btn-outline !text-[10px] !py-0.5"
               onClick={async () => {
                 try {
+                  const r = await api('/api/v1/artemis/today')
+                  notify(
+                    `Artemis: ${r.data.count} appointments today (R${r.data.remote} remote / O${r.data.onsite} on-site)`
+                  )
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Schedule today
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-[10px] !py-0.5"
+              onClick={async () => {
+                try {
                   const r = await api('/api/v1/field/day-briefing')
                   const d = r.data
                   notify(
