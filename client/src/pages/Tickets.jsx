@@ -620,6 +620,20 @@ export default function Tickets() {
                     <button type="button" className="btn-outline flex-1 !text-xs" onClick={printJob}>Print job card</button>
                     <button type="button" className="btn-outline flex-1 !text-xs" onClick={pdfJob}>PDF job card</button>
                     <button type="button" className="btn-share flex-1 bg-[#25D366] !text-xs text-white" onClick={whatsappStatus}>WhatsApp job card</button>
+                  <button
+                    type="button"
+                    className="btn-outline flex-1 !text-xs"
+                    onClick={async () => {
+                      try {
+                        const r = await api(`/api/v1/field/tickets/${selected}/job-pack`)
+                        window.open(r.data.url, '_blank', 'noopener')
+                      } catch (e) {
+                        notify(e.message, 'error')
+                      }
+                    }}
+                  >
+                    Job pack WA
+                  </button>
                   </div>
                   <div className="flex flex-wrap gap-1">
                     <span className="text-[10px] text-slate-500 w-full">Update status + notify client:</span>

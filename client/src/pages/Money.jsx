@@ -160,6 +160,23 @@ export default function Money() {
               className="btn-outline !text-xs"
               onClick={async () => {
                 try {
+                  const r = await api('/api/v1/money/week-pulse')
+                  const d = r.data
+                  notify(
+                    `7d: collected R ${Number(d.collected.total).toFixed(2)} · invoiced R ${Number(d.invoiced.total).toFixed(2)} · overdue R ${Number(d.overdue.total).toFixed(2)} (${d.overdue.n})`
+                  )
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Week pulse
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                try {
                   const r = await api('/api/v1/money/day-snapshot')
                   const d = r.data
                   notify(

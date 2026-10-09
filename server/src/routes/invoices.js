@@ -463,3 +463,31 @@ invoicesRouter.get('/:id/accept-whatsapp', requireRole('staff'), (req, res) => {
     : `https://wa.me/?text=${encodeURIComponent(text)}`
   res.json({ data: { text, url } })
 })
+
+/* ─── Athena: cancel / void document with reason ─── */
+invoicesRouter.post('/:id/cancel', requireRole('staff'), (req, res, next) => {
+  try {
+    const inv = loadInvoice(req.params.id)
+    if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
+    if (inv.status === 'cancelled') {
+      return res.status(400).json({ error: true, message: 'Already cancelled' })
+    }
+    if (Number(inv.amount_paid) > 0.009) {
+      return res.status(400).json({
+        error: true,
+        message: 'Has payments — reverse or credit before cancel, or write off balance first',
+      })
+    }
+    const body = z
+      .object({ reason: z.string().min(2).max(500) })
+      .parse(req.body || {})
+    const notes = [inv.notes || '', `CANCELLED: ${body.reason}`, `At ${now()} by staff`].filter(Boolean).join('\n')
+    db.prepare(`UPDATE invoices SET status='cancelled', notes=?, updated_at=? WHERE id=?`).run(notes, now(), inv.id)
+    try {
+      emitWebhook('invoice.cancelled', { id: inv.id, number: inv.number, reason: body.reason })
+    } catch {}
+    res.json({ data: loadInvoice(inv.id) })
+  } catch (e) {
+    next(e)
+  }
+})

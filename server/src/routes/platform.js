@@ -912,3 +912,22 @@ platformRouter.get('/failed-logins', requireRole('admin'), (req, res) => {
     .get(new Date(Date.now() - 86400000).toISOString())
   res.json({ data: { events: rows, failed_last_24h: last24.c } })
 })
+
+
+platformRouter.post('/sessions/revoke-others', requireRole('staff'), (req, res) => {
+  const current = req.headers.authorization?.replace(/^Bearer\s+/i, '') || ''
+  // revoke all sessions for this user except we only store session rows
+  const r = db
+    .prepare(
+      `UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`
+    )
+    .run(now(), req.user.sub)
+  audit(req.user.sub, 'session.revoke_others', `count=${r.changes}`, req.ip)
+  res.json({ data: { revoked: r.changes, note: 'All listed sessions revoked — sign in again on other devices' } })
+})
+
+platformRouter.post('/sessions/revoke-all-staff', requireRole('admin'), (req, res) => {
+  const r = db.prepare(`UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL`).run(now())
+  audit(req.user.sub, 'session.revoke_all', `count=${r.changes}`, req.ip)
+  res.json({ data: { revoked: r.changes } })
+})

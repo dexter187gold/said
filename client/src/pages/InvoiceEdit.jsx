@@ -215,6 +215,27 @@ export default function InvoiceEdit() {
               WhatsApp
             </button>
           )}
+          {!isNew && status !== 'cancelled' && (
+            <button
+              type="button"
+              className="btn-outline !text-xs !text-red-600"
+              onClick={async () => {
+                const reason = prompt('Cancel reason')
+                if (!reason || reason.trim().length < 2) return
+                try {
+                  await api(`/api/v1/invoices/${id}/cancel`, { method: 'POST', body: { reason: reason.trim() } })
+                  notify('Cancelled')
+                  const r = await api(`/api/v1/invoices/${id}`)
+                  setLoaded(r.data)
+                  setStatus(r.data.status)
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Cancel doc
+            </button>
+          )}
           {!isNew && pathType === 'quote' && (
             <>
               <button
@@ -557,6 +578,27 @@ export default function InvoiceEdit() {
 
         <div className="flex flex-wrap gap-2">
           <button className="btn-primary" type="submit">{isNew ? `Create ${typeLabel.toLowerCase()}` : 'Save'}</button>
+          {!isNew && status !== 'cancelled' && (
+            <button
+              type="button"
+              className="btn-outline !text-xs !text-red-600"
+              onClick={async () => {
+                const reason = prompt('Cancel reason')
+                if (!reason || reason.trim().length < 2) return
+                try {
+                  await api(`/api/v1/invoices/${id}/cancel`, { method: 'POST', body: { reason: reason.trim() } })
+                  notify('Cancelled')
+                  const r = await api(`/api/v1/invoices/${id}`)
+                  setLoaded(r.data)
+                  setStatus(r.data.status)
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Cancel doc
+            </button>
+          )}
           {!isNew && pathType === 'quote' && (
             <button type="button" className="btn-outline" onClick={convertQuote}>
               Convert → invoice

@@ -736,6 +736,38 @@ export default function Platform() {
           <div className="text-xs text-amber-700 dark:text-amber-400">
             Failed logins (24h): {failedLogins?.failed_last_24h ?? '—'}
           </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                if (!confirm('Revoke all your other sessions?')) return
+                try {
+                  const r = await api('/api/v1/platform/sessions/revoke-others', { method: 'POST' })
+                  notify(`Revoked ${r.data.revoked} sessions`)
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Revoke my other sessions
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-xs !text-red-600"
+              onClick={async () => {
+                if (!confirm('Revoke ALL active sessions for every user?')) return
+                try {
+                  const r = await api('/api/v1/platform/sessions/revoke-all-staff', { method: 'POST' })
+                  notify(`Revoked ${r.data.revoked} sessions`)
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Revoke all sessions
+            </button>
+          </div>
           <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
             <div className="text-[10px] font-semibold uppercase text-slate-500 mb-1">Recent logins</div>
             <ul className="text-[10px] space-y-0.5 max-h-32 overflow-auto">

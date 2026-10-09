@@ -1317,3 +1317,41 @@ moneyRouter.get('/day-snapshot', requireRole('staff'), (req, res) => {
     },
   })
 })
+
+
+moneyRouter.get('/week-pulse', requireRole('staff'), (req, res) => {
+  const end = new Date()
+  const start = new Date(Date.now() - 7 * 86400000)
+  const from = start.toISOString().slice(0, 10)
+  const to = end.toISOString().slice(0, 10)
+  const payments = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS n
+       FROM payments WHERE date >= ? AND date <= ?`
+    )
+    .get(from, to)
+  const raised = db
+    .prepare(
+      `SELECT COALESCE(SUM(total),0) AS total, COUNT(*) AS n
+       FROM invoices WHERE doc_type='invoice' AND date >= ? AND date <= ?
+         AND status != 'cancelled'`
+    )
+    .get(from, to)
+  const overdue = db
+    .prepare(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(total - amount_paid),0) AS total
+       FROM invoices
+       WHERE doc_type='invoice' AND status NOT IN ('paid','cancelled')
+         AND due_date IS NOT NULL AND due_date < ?`
+    )
+    .get(to)
+  res.json({
+    data: {
+      from,
+      to,
+      collected: payments,
+      invoiced: raised,
+      overdue,
+    },
+  })
+})
