@@ -852,6 +852,15 @@ platformRouter.get('/security-score', requireRole('admin'), (_req, res) => {
   let svcCount = 0
   try { svcCount = db.prepare(`SELECT COUNT(*) AS c FROM service_catalog WHERE active=1`).get().c } catch {}
   add('services', svcCount >= 2, `Service catalogue (${svcCount})`, 'Open Templates to seed Remote/On-site services')
+  let fail24 = 0
+  try {
+    fail24 = db.prepare(
+      `SELECT COUNT(*) AS c FROM audit_log WHERE created_at >= ? AND (
+         action LIKE '%login%fail%' OR action = 'auth.failed' OR detail LIKE '%failed login%'
+       )`
+    ).get(new Date(Date.now() - 86400000).toISOString()).c
+  } catch {}
+  add('failed_logins', fail24 < 20, `Failed logins (24h): ${fail24}`, 'Review Platform → Security if high')
 
   const score = Math.round((checks.filter((c) => c.ok).length / checks.length) * 100)
   res.json({ data: { score, checks, last_backup_at: lastBackup || null, at: now() } })
@@ -877,4 +886,29 @@ platformRouter.get('/login-history', requireRole('admin'), (req, res) => {
     )
     .all(limit)
   res.json({ data: rows })
+})
+
+
+platformRouter.get('/failed-logins', requireRole('admin'), (req, res) => {
+  const limit = Math.min(100, Number(req.query.limit) || 40)
+  const rows = db
+    .prepare(
+      `SELECT a.*, u.email AS user_email
+       FROM audit_log a
+       LEFT JOIN users u ON u.id = a.user_id
+       WHERE a.action LIKE '%login%fail%' OR a.action LIKE 'login.fail%' OR a.action = 'auth.failed'
+          OR a.detail LIKE '%failed login%' OR a.detail LIKE '%invalid password%'
+       ORDER BY a.created_at DESC LIMIT ?`
+    )
+    .all(limit)
+  const last24 = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM audit_log
+       WHERE created_at >= ? AND (
+         action LIKE '%login%fail%' OR action LIKE 'login.fail%' OR action = 'auth.failed'
+         OR detail LIKE '%failed login%'
+       )`
+    )
+    .get(new Date(Date.now() - 86400000).toISOString())
+  res.json({ data: { events: rows, failed_last_24h: last24.c } })
 })

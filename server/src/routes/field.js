@@ -1288,3 +1288,41 @@ fieldRouter.patch('/tickets/:id/preferred-service', requireRole('staff'), (req, 
     next(e)
   }
 })
+
+
+fieldRouter.get('/day-briefing', requireRole('staff'), (req, res) => {
+  const userId = req.query.user_id || req.user.sub
+  const day = (req.query.date || now().slice(0, 10)).slice(0, 10)
+  const jobs = db
+    .prepare(
+      `SELECT t.id, t.title, t.status, t.priority, t.category, t.preferred_service, t.due_date,
+              c.name AS client_name, c.phone AS client_phone, c.address AS client_address
+       FROM tickets t
+       LEFT JOIN clients c ON c.id = t.client_id
+       WHERE t.assignee_id = ? AND COALESCE(t.is_template,0)=0
+         AND t.status IN ('open','in_progress','waiting')
+       ORDER BY
+         CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+         t.due_date IS NULL, t.due_date ASC
+       LIMIT 30`
+    )
+    .all(userId)
+  const checkins = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM ticket_checkins WHERE user_id = ? AND created_at LIKE ?`
+    )
+    .get(userId, `${day}%`)
+  const remote = jobs.filter((j) => j.category === 'remote' || j.preferred_service === 'remote').length
+  const onsite = jobs.filter((j) => j.category === 'onsite' || j.preferred_service === 'onsite').length
+  res.json({
+    data: {
+      date: day,
+      user_id: userId,
+      open_jobs: jobs.length,
+      remote_jobs: remote,
+      onsite_jobs: onsite,
+      checkins_today: checkins.n,
+      jobs,
+    },
+  })
+})

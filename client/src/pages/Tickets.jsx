@@ -423,6 +423,23 @@ export default function Tickets() {
             >
               Utilisation
             </button>
+            <button
+              type="button"
+              className="btn-outline !text-[10px] !py-0.5"
+              onClick={async () => {
+                try {
+                  const r = await api('/api/v1/field/day-briefing')
+                  const d = r.data
+                  notify(
+                    `Briefing: ${d.open_jobs} open · ${d.remote_jobs} remote · ${d.onsite_jobs} on-site · ${d.checkins_today} check-ins`
+                  )
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Day briefing
+            </button>
           </div>
         )}
 

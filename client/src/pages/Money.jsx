@@ -159,6 +159,23 @@ export default function Money() {
               type="button"
               className="btn-outline !text-xs"
               onClick={async () => {
+                try {
+                  const r = await api('/api/v1/money/day-snapshot')
+                  const d = r.data
+                  notify(
+                    `${d.date}: paid R ${Number(d.payments_today.total).toFixed(2)} (${d.payments_today.n}) · raised R ${Number(d.invoices_raised_today.total).toFixed(2)} · open R ${Number(d.total_open).toFixed(2)}`
+                  )
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Today snapshot
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
                 const ids = open.slice(0, 20).map((x) => x.id)
                 if (!ids.length) return notify('No open invoices')
                 if (!confirm(`Mark up to ${ids.length} open invoice(s) paid in full?`)) return

@@ -215,6 +215,45 @@ export default function InvoiceEdit() {
               WhatsApp
             </button>
           )}
+          {!isNew && pathType === 'quote' && (
+            <>
+              <button
+                type="button"
+                className="btn-outline !text-xs"
+                onClick={async () => {
+                  const who = prompt('Accepted by (client name)')
+                  try {
+                    await api(`/api/v1/invoices/${id}/accept`, {
+                      method: 'POST',
+                      body: { accepted_by: who || null },
+                    })
+                    notify('Quote marked accepted')
+                    const r = await api(`/api/v1/invoices/${id}`)
+                    setLoaded(r.data)
+                    setStatus(r.data.status)
+                  } catch (e) {
+                    notify(e.message, 'error')
+                  }
+                }}
+              >
+                Mark accepted
+              </button>
+              <button
+                type="button"
+                className="btn-share bg-[#25D366] text-white !text-xs"
+                onClick={async () => {
+                  try {
+                    const r = await api(`/api/v1/invoices/${id}/accept-whatsapp`)
+                    window.open(r.data.url, '_blank', 'noopener')
+                  } catch (e) {
+                    notify(e.message, 'error')
+                  }
+                }}
+              >
+                Request accept WA
+              </button>
+            </>
+          )}
         </div>
       </div>
 

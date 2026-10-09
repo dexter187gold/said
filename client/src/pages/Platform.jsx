@@ -29,6 +29,7 @@ export default function Platform() {
   const [deliveries, setDeliveries] = useState([])
   const [secScore, setSecScore] = useState(null)
   const [loginHistory, setLoginHistory] = useState([])
+  const [failedLogins, setFailedLogins] = useState(null)
 
   const load = () => {
     api('/api/v1/platform/flags').then((r) => setFlags(r.data || [])).catch(() => {})
@@ -52,6 +53,7 @@ export default function Platform() {
       api('/api/v1/platform/rate-limits').then((r) => setRateStats(r.data)).catch(() => {})
       api('/api/v1/platform/security-score').then((r) => setSecScore(r.data)).catch(() => {})
       api('/api/v1/platform/login-history').then((r) => setLoginHistory(r.data || [])).catch(() => {})
+      api('/api/v1/platform/failed-logins').then((r) => setFailedLogins(r.data)).catch(() => {})
       api('/api/v1/platform/users-branches').then((r) => setUserBranches(r.data || [])).catch(() => {})
     }
     api('/api/v1/platform/branches').then((r) => setBranches(r.data || [])).catch(() => {})
@@ -731,6 +733,9 @@ export default function Platform() {
           >
             Purge old deliveries (30d)
           </button>
+          <div className="text-xs text-amber-700 dark:text-amber-400">
+            Failed logins (24h): {failedLogins?.failed_last_24h ?? '—'}
+          </div>
           <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
             <div className="text-[10px] font-semibold uppercase text-slate-500 mb-1">Recent logins</div>
             <ul className="text-[10px] space-y-0.5 max-h-32 overflow-auto">

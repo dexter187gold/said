@@ -1278,3 +1278,42 @@ moneyRouter.post('/bulk-paid', requireRole('staff'), (req, res, next) => {
     next(e)
   }
 })
+
+
+moneyRouter.get('/day-snapshot', requireRole('staff'), (req, res) => {
+  const day = (req.query.date || now().slice(0, 10)).slice(0, 10)
+  const paidToday = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS n
+       FROM payments WHERE date = ? OR created_at LIKE ?`
+    )
+    .get(day, `${day}%`)
+  const invoicesToday = db
+    .prepare(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(total),0) AS total
+       FROM invoices WHERE doc_type='invoice' AND date = ?`
+    )
+    .get(day)
+  const openBal = db
+    .prepare(
+      `SELECT COALESCE(SUM(total - amount_paid),0) AS total
+       FROM invoices WHERE doc_type='invoice' AND status NOT IN ('paid','cancelled')`
+    )
+    .get()
+  const methods = db
+    .prepare(
+      `SELECT method, COUNT(*) AS n, COALESCE(SUM(amount),0) AS total
+       FROM payments WHERE date = ? OR created_at LIKE ?
+       GROUP BY method ORDER BY total DESC`
+    )
+    .all(day, `${day}%`)
+  res.json({
+    data: {
+      date: day,
+      payments_today: paidToday,
+      invoices_raised_today: invoicesToday,
+      total_open: openBal.total,
+      by_method: methods,
+    },
+  })
+})

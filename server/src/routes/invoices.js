@@ -396,3 +396,70 @@ invoicesRouter.get('/:id/whatsapp', requireRole('staff'), (req, res) => {
     : `https://wa.me/?text=${encodeURIComponent(text)}`
   res.json({ data: { text, url, number: inv.number } })
 })
+
+/* ─── Athena next: quote acceptance ─── */
+invoicesRouter.post('/:id/accept', requireRole('staff'), (req, res, next) => {
+  try {
+    const inv = loadInvoice(req.params.id)
+    if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
+    if ((inv.doc_type || 'invoice') !== 'quote') {
+      return res.status(400).json({ error: true, message: 'Only quotes can be accepted' })
+    }
+    const body = z
+      .object({
+        accepted_by: z.string().optional().nullable(),
+        note: z.string().optional().nullable(),
+      })
+      .parse(req.body || {})
+    const note = [
+      inv.notes || '',
+      body.accepted_by ? `Accepted by: ${body.accepted_by}` : 'Accepted',
+      body.note || '',
+      `Accepted at ${now()}`,
+    ]
+      .filter(Boolean)
+      .join('\n')
+    db.prepare(`UPDATE invoices SET status=?, notes=?, updated_at=? WHERE id=?`).run(
+      'accepted',
+      note,
+      now(),
+      inv.id
+    )
+    try {
+      emitWebhook('quote.accepted', { id: inv.id, number: inv.number, client_id: inv.client_id })
+    } catch {}
+    res.json({ data: loadInvoice(inv.id) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+invoicesRouter.get('/:id/accept-whatsapp', requireRole('staff'), (req, res) => {
+  const inv = loadInvoice(req.params.id)
+  if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
+  const co = db.prepare(`SELECT * FROM company WHERE id='main'`).get() || {}
+  const text = [
+    `*Quote for acceptance* — ${co.name || 'SAID'}`,
+    `Quote *${inv.number}*`,
+    inv.client?.name ? `Dear ${inv.client.name},` : null,
+    '',
+    `Please review quote ${inv.number} for R ${Number(inv.total).toFixed(2)}.`,
+    inv.service_type ? `Service: ${inv.service_type}` : null,
+    inv.pricing_model ? `Pricing model: ${inv.pricing_model}` : null,
+    '',
+    'Reply *ACCEPT* with your name to confirm, or call us with any questions.',
+    'We look forward to looking after your equipment.',
+    co.phone ? `Tel: ${co.phone}` : null,
+  ]
+    .filter((x) => x != null)
+    .join('\n')
+  let phone = ''
+  if (inv.client?.phone) {
+    phone = String(inv.client.phone).replace(/\D/g, '')
+    if (phone.startsWith('0')) phone = '27' + phone.slice(1)
+  }
+  const url = phone
+    ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+    : `https://wa.me/?text=${encodeURIComponent(text)}`
+  res.json({ data: { text, url } })
+})
