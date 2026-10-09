@@ -49,7 +49,7 @@ app.get('/api/v1/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'said',
-    version: '2.4.0-vat',
+    version: '2.5.0-services',
     templates: tplCount,
     time: new Date().toISOString(),
   })

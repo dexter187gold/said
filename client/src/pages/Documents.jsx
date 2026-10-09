@@ -57,6 +57,7 @@ export default function Documents() {
   const [loadingTpl, setLoadingTpl] = useState(false)
   const [error, setError] = useState('')
   const [tab, setTab] = useState('preview')
+  const [services, setServices] = useState([])
 
   const load = () => {
     setError('')
@@ -287,6 +288,51 @@ export default function Documents() {
               <p className="p-6 text-sm text-slate-500">Select a template to preview.</p>
             )}
           </div>
+        </div>
+      </div>
+
+      <div className="card p-4 mt-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-bold text-sm">Service catalogue</h2>
+            <p className="text-xs text-slate-500">
+              Remote &amp; on-site support (and more) — add these as lines on invoices/quotes
+            </p>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-slate-500 border-b border-slate-200 dark:border-slate-700">
+                <th className="py-1.5 pr-2">Service</th>
+                <th className="py-1.5 pr-2">Unit</th>
+                <th className="py-1.5 pr-2 text-right">Default rate</th>
+                <th className="py-1.5">Kind</th>
+              </tr>
+            </thead>
+            <tbody>
+              {services.map((s) => (
+                <tr key={s.id} className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-1.5 pr-2">
+                    <div className="font-medium">{s.name}</div>
+                    <div className="text-slate-500 max-w-md truncate">{s.description}</div>
+                  </td>
+                  <td className="py-1.5 pr-2">{s.unit}</td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums font-semibold">
+                    R {Number(s.default_price).toFixed(2)}
+                  </td>
+                  <td className="py-1.5 capitalize">{s.kind}</td>
+                </tr>
+              ))}
+              {!services.length && (
+                <tr>
+                  <td colSpan={4} className="py-4 text-slate-500">
+                    Services seed on first API call — open an invoice or refresh.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

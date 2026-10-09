@@ -29,6 +29,7 @@ export default function InvoiceEdit() {
   const [paymentNote, setPaymentNote] = useState('Payment due as stated. EFT / cash / card.')
   const [lines, setLines] = useState([{ description: '', qty: 1, price: 0 }])
   const [snippets, setSnippets] = useState([])
+  const [services, setServices] = useState([])
   const [pricingModel, setPricingModel] = useState('flatrate')
   const [vatEnabled, setVatEnabled] = useState(false)
   const [vatRate, setVatRate] = useState(0.15)
@@ -54,6 +55,7 @@ export default function InvoiceEdit() {
 
   useEffect(() => {
     api('/api/v1/documents/line-snippets').then((r) => setSnippets(r.data || [])).catch(() => {})
+    api('/api/v1/documents/services').then((r) => setServices(r.data || [])).catch(() => {})
   }, [])
   useEffect(() => {
     api('/api/v1/clients').then((r) => setClients(r.data)).catch(() => {})
@@ -353,7 +355,25 @@ export default function InvoiceEdit() {
           </div>
           <div className="sm:col-span-2">
             <label className="label">Service type</label>
-            <input className="input" value={serviceType} onChange={(e) => setServiceType(e.target.value)} />
+            <select
+              className="input"
+              value={serviceType}
+              onChange={(e) => setServiceType(e.target.value)}
+              aria-label="Service type"
+            >
+              <option value="">— Select service —</option>
+              <option value="Remote support">Remote support</option>
+              <option value="On-site support">On-site support</option>
+              <option value="Remote + On-site">Remote + On-site</option>
+              <option value="Project / setup">Project / setup</option>
+              <option value="Retainer">Retainer</option>
+              <option value="Other">Other</option>
+              {services.map((s) => (
+                <option key={`st-${s.id}`} value={s.name}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -361,6 +381,39 @@ export default function InvoiceEdit() {
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">Line items</h3>
             <button type="button" className="btn-outline !py-1 text-xs" onClick={() => setLines((L) => [...L, { description: '', qty: 1, price: 0 }])}>+ Line</button>
+            {services.length > 0 && (
+              <select
+                className="input !w-auto !text-xs !py-1"
+                defaultValue=""
+                onChange={(e) => {
+                  const s = services.find((x) => x.id === e.target.value)
+                  if (!s) return
+                  setLines((L) => [
+                    ...L,
+                    {
+                      description: s.description || s.name,
+                      qty: s.unit === 'hour' ? 1 : 1,
+                      price: Number(s.default_price) || 0,
+                    },
+                  ])
+                  if (!serviceType) setServiceType(s.name)
+                  // Prefer hourly pricing model for support hours
+                  if (s.unit === 'hour' && !templateTouched) {
+                    setPricingModel('hourly')
+                    setTemplateTouched(false)
+                  }
+                  e.target.value = ''
+                }}
+                aria-label="Add service line"
+              >
+                <option value="">+ Add service…</option>
+                {services.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} · R {Number(s.default_price).toFixed(0)}/{s.unit || 'unit'}
+                  </option>
+                ))}
+              </select>
+            )}
             {snippets.length > 0 && (
               <select
                 className="input !w-auto !text-xs !py-1"

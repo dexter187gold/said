@@ -204,3 +204,112 @@ documentsRouter.delete('/line-snippets/:id', requireRole('staff'), (req, res) =>
   db.prepare(`DELETE FROM line_snippets WHERE id = ?`).run(req.params.id)
   res.json({ data: { ok: true } })
 })
+
+/* ─── IT services catalogue (Remote · On-site · more) ─── */
+try {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS service_catalog (
+  id TEXT PRIMARY KEY,
+  code TEXT,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  unit TEXT DEFAULT 'hour',
+  default_price REAL DEFAULT 0,
+  kind TEXT DEFAULT 'support',
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+`)
+  const count = db.prepare(`SELECT COUNT(*) AS c FROM service_catalog`).get().c
+  if (count === 0) {
+    const rate = Number(db.prepare(`SELECT value FROM settings WHERE key='hourly_rate'`).get()?.value || 450)
+    const onsite = Math.round(rate * 1.15)
+    const seed = [
+      ['svc_remote', 'REMOTE', 'Remote support', 'Remote IT support (screen-share / remote access) — diagnosis, config, software help', 'hour', rate, 'support', 10],
+      ['svc_onsite', 'ONSITE', 'On-site support', 'On-site IT support at client premises — call-out labour (travel may be extra)', 'hour', onsite, 'support', 20],
+      ['svc_callout', 'CALLOUT', 'Call-out fee', 'Travel / call-out fee (fixed) for on-site visit within standard radius', 'each', 350, 'travel', 30],
+      ['svc_diag', 'DIAG', 'Diagnostics', 'Hardware / software diagnostics and written findings', 'each', rate, 'support', 40],
+      ['svc_setup', 'SETUP', 'PC / workstation setup', 'OS setup, drivers, updates, basic hardening, user profile', 'each', rate * 2, 'project', 50],
+      ['svc_backup', 'BACKUP', 'Backup configuration', 'Local or cloud backup setup and test restore', 'each', rate, 'project', 60],
+    ]
+    const ins = db.prepare(
+      `INSERT OR IGNORE INTO service_catalog (id, code, name, description, unit, default_price, kind, active, sort_order, created_at)
+       VALUES (?,?,?,?,?,?,?,1,?,?)`
+    )
+    const ts = now()
+    for (const row of seed) ins.run(...row, ts)
+    // Mirror as line snippets for quick add
+    const insSnip = db.prepare(
+      `INSERT OR IGNORE INTO line_snippets (id, label, description, default_qty, default_price, category, created_at)
+       VALUES (?,?,?,?,?,'service',?)`
+    )
+    for (const row of seed) {
+      insSnip.run(`snip_${row[0]}`, row[2], row[3], 1, row[5], ts)
+    }
+  }
+} catch (e) {
+  console.warn('service_catalog', e.message)
+}
+
+documentsRouter.get('/services', (req, res) => {
+  const all = req.query.all === '1'
+  const rows = all
+    ? db.prepare(`SELECT * FROM service_catalog ORDER BY sort_order, name`).all()
+    : db.prepare(`SELECT * FROM service_catalog WHERE active=1 ORDER BY sort_order, name`).all()
+  res.json({ data: rows })
+})
+
+documentsRouter.post('/services', requireRole('admin'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        name: z.string().min(1),
+        description: z.string().min(1),
+        code: z.string().optional().nullable(),
+        unit: z.string().default('hour'),
+        default_price: z.coerce.number().default(0),
+        kind: z.string().default('support'),
+      })
+      .parse(req.body)
+    const id = uid()
+    db.prepare(
+      `INSERT INTO service_catalog (id, code, name, description, unit, default_price, kind, active, sort_order, created_at)
+       VALUES (?,?,?,?,?,?,?,1,100,?)`
+    ).run(id, body.code || null, body.name, body.description, body.unit, body.default_price, body.kind, now())
+    res.status(201).json({ data: db.prepare(`SELECT * FROM service_catalog WHERE id = ?`).get(id) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+documentsRouter.patch('/services/:id', requireRole('admin'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        name: z.string().optional(),
+        description: z.string().optional(),
+        default_price: z.coerce.number().optional(),
+        unit: z.string().optional(),
+        active: z.coerce.number().int().min(0).max(1).optional(),
+        kind: z.string().optional(),
+      })
+      .parse(req.body || {})
+    const ex = db.prepare(`SELECT * FROM service_catalog WHERE id = ?`).get(req.params.id)
+    if (!ex) return res.status(404).json({ error: true, message: 'Not found' })
+    db.prepare(
+      `UPDATE service_catalog SET name=?, description=?, default_price=?, unit=?, active=?, kind=? WHERE id=?`
+    ).run(
+      body.name ?? ex.name,
+      body.description ?? ex.description,
+      body.default_price ?? ex.default_price,
+      body.unit ?? ex.unit,
+      body.active ?? ex.active,
+      body.kind ?? ex.kind,
+      req.params.id
+    )
+    res.json({ data: db.prepare(`SELECT * FROM service_catalog WHERE id = ?`).get(req.params.id) })
+  } catch (e) {
+    next(e)
+  }
+})
