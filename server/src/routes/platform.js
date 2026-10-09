@@ -931,3 +931,29 @@ platformRouter.post('/sessions/revoke-all-staff', requireRole('admin'), (req, re
   audit(req.user.sub, 'session.revoke_all', `count=${r.changes}`, req.ip)
   res.json({ data: { revoked: r.changes } })
 })
+
+
+platformRouter.get('/ops-health', requireRole('admin'), (_req, res) => {
+  const tables = ['clients', 'invoices', 'tickets', 'payments', 'users', 'sessions']
+  const counts = {}
+  for (const table of tables) {
+    try {
+      counts[table] = db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c
+    } catch {
+      counts[table] = null
+    }
+  }
+  let appointments = 0
+  try {
+    appointments = db.prepare(`SELECT COUNT(*) AS c FROM appointments`).get().c
+  } catch {}
+  res.json({
+    data: {
+      ok: true,
+      at: now(),
+      counts,
+      appointments,
+      version: '2.8.0-mythos6',
+    },
+  })
+})

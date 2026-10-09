@@ -313,3 +313,19 @@ documentsRouter.patch('/services/:id', requireRole('admin'), (req, res, next) =>
     next(e)
   }
 })
+
+/* ─── Athena Q: service → snippet sync rates from catalog ─── */
+documentsRouter.post('/services/sync-snippets', requireRole('admin'), (_req, res) => {
+  const services = db.prepare(`SELECT * FROM service_catalog WHERE active=1`).all()
+  const ins = db.prepare(
+    `INSERT OR REPLACE INTO line_snippets (id, label, description, default_qty, default_price, category, created_at)
+     VALUES (?,?,?,?,?,'service',?)`
+  )
+  const ts = now()
+  let n = 0
+  for (const s of services) {
+    ins.run(`snip_${s.id}`, s.name, s.description || s.name, 1, s.default_price, ts)
+    n++
+  }
+  res.json({ data: { synced: n } })
+})

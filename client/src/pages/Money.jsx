@@ -160,6 +160,23 @@ export default function Money() {
               className="btn-outline !text-xs"
               onClick={async () => {
                 try {
+                  const r = await api('/api/v1/money/age-buckets')
+                  const b = r.data.buckets
+                  notify(
+                    `Ageing: current R ${Number(b.current).toFixed(0)} · 1-30 R ${Number(b.d1_30).toFixed(0)} · 31-60 R ${Number(b.d31_60).toFixed(0)} · 61-90 R ${Number(b.d61_90).toFixed(0)} · 90+ R ${Number(b.d90p).toFixed(0)}`
+                  )
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              Age buckets
+            </button>
+            <button
+              type="button"
+              className="btn-outline !text-xs"
+              onClick={async () => {
+                try {
                   const r = await api('/api/v1/money/week-pulse')
                   const d = r.data
                   notify(

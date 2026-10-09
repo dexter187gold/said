@@ -736,6 +736,23 @@ export default function Platform() {
           <div className="text-xs text-amber-700 dark:text-amber-400">
             Failed logins (24h): {failedLogins?.failed_last_24h ?? '—'}
           </div>
+          <button
+            type="button"
+            className="btn-outline !text-xs"
+            onClick={async () => {
+              try {
+                const r = await api('/api/v1/platform/ops-health')
+                const c = r.data.counts || {}
+                notify(
+                  `Health OK · clients ${c.clients} · invoices ${c.invoices} · tickets ${c.tickets} · appts ${r.data.appointments}`
+                )
+              } catch (e) {
+                notify(e.message, 'error')
+              }
+            }}
+          >
+            Ops health
+          </button>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"

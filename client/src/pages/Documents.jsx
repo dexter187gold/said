@@ -299,6 +299,20 @@ export default function Documents() {
               Remote &amp; on-site support (and more) — add these as lines on invoices/quotes
             </p>
           </div>
+          <button
+            type="button"
+            className="btn-outline !text-xs"
+            onClick={async () => {
+              try {
+                const r = await api('/api/v1/documents/services/sync-snippets', { method: 'POST' })
+                notify(`Synced ${r.data.synced} service snippets`)
+              } catch (e) {
+                notify(e.message, 'error')
+              }
+            }}
+          >
+            Sync to snippets
+          </button>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">

@@ -92,3 +92,19 @@ apolloRouter.get('/top-clients', requireRole('staff'), (req, res) => {
     .all(limit)
   res.json({ data: rows })
 })
+
+
+apolloRouter.get('/ticket-mix', requireRole('staff'), (_req, res) => {
+  const byStatus = db
+    .prepare(
+      `SELECT status, COUNT(*) AS c FROM tickets WHERE COALESCE(is_template,0)=0 GROUP BY status`
+    )
+    .all()
+  const byCategory = db
+    .prepare(
+      `SELECT COALESCE(category,'other') AS category, COUNT(*) AS c
+       FROM tickets WHERE COALESCE(is_template,0)=0 GROUP BY category ORDER BY c DESC`
+    )
+    .all()
+  res.json({ data: { by_status: byStatus, by_category: byCategory } })
+})

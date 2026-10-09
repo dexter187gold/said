@@ -1326,3 +1326,27 @@ fieldRouter.get('/day-briefing', requireRole('staff'), (req, res) => {
     },
   })
 })
+
+
+fieldRouter.post('/tickets/bulk-preferred', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        ids: z.array(z.string()).min(1).max(40),
+        preferred_service: z.enum(['remote', 'onsite']),
+      })
+      .parse(req.body)
+    let n = 0
+    for (const id of body.ids) {
+      const r = db
+        .prepare(
+          `UPDATE tickets SET preferred_service=?, category=?, updated_at=? WHERE id=?`
+        )
+        .run(body.preferred_service, body.preferred_service, now(), id)
+      n += r.changes
+    }
+    res.json({ data: { updated: n } })
+  } catch (e) {
+    next(e)
+  }
+})

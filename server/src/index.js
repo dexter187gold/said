@@ -51,7 +51,7 @@ app.get('/api/v1/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'said',
-    version: '2.7.0-apollo-artemis',
+    version: '2.8.0-mythos6',
     templates: tplCount,
     time: new Date().toISOString(),
   })

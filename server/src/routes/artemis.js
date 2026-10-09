@@ -128,3 +128,39 @@ artemisRouter.get('/today', requireRole('staff'), (req, res) => {
     },
   })
 })
+
+
+artemisRouter.get('/appointments/:id/whatsapp', requireRole('staff'), (req, res) => {
+  const a = db
+    .prepare(
+      `SELECT a.*, c.name AS client_name, c.phone AS client_phone
+       FROM appointments a LEFT JOIN clients c ON c.id = a.client_id WHERE a.id = ?`
+    )
+    .get(req.params.id)
+  if (!a) return res.status(404).json({ error: true, message: 'Not found' })
+  const co = db.prepare(`SELECT * FROM company WHERE id='main'`).get() || {}
+  const when = (a.starts_at || '').replace('T', ' ').slice(0, 16)
+  const text = [
+    `*Appointment reminder* — ${co.name || 'PC REPAIR DEX'}`,
+    a.client_name ? `Hi ${a.client_name},` : null,
+    '',
+    `We are scheduled for: *${a.title}*`,
+    `When: ${when}`,
+    `Mode: ${a.mode || 'onsite'}`,
+    a.notes ? `Note: ${a.notes}` : null,
+    '',
+    'Reply if you need to reschedule. Thank you.',
+    co.phone ? `Tel: ${co.phone}` : null,
+  ]
+    .filter((x) => x != null)
+    .join('\n')
+  let phone = ''
+  if (a.client_phone) {
+    phone = String(a.client_phone).replace(/\D/g, '')
+    if (phone.startsWith('0')) phone = '27' + phone.slice(1)
+  }
+  const url = phone
+    ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+    : `https://wa.me/?text=${encodeURIComponent(text)}`
+  res.json({ data: { text, url } })
+})

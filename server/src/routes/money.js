@@ -1355,3 +1355,32 @@ moneyRouter.get('/week-pulse', requireRole('staff'), (req, res) => {
     },
   })
 })
+
+
+moneyRouter.get('/age-buckets', requireRole('staff'), (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT id, number, client_id, date, due_date, total, amount_paid,
+              (total - amount_paid) AS balance, status
+       FROM invoices
+       WHERE doc_type='invoice' AND status NOT IN ('paid','cancelled')
+         AND (total - amount_paid) > 0.009`
+    )
+    .all()
+  const today = new Date()
+  const buckets = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90p: 0 }
+  const counts = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90p: 0 }
+  for (const r of rows) {
+    const bal = Number(r.balance)
+    const due = r.due_date || r.date
+    const days = due ? Math.floor((today - new Date(due)) / 86400000) : 0
+    let key = 'current'
+    if (days > 90) key = 'd90p'
+    else if (days > 60) key = 'd61_90'
+    else if (days > 30) key = 'd31_60'
+    else if (days > 0) key = 'd1_30'
+    buckets[key] += bal
+    counts[key] += 1
+  }
+  res.json({ data: { buckets, counts, total_open: rows.reduce((s, r) => s + Number(r.balance), 0) } })
+})
