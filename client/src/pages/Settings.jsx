@@ -30,8 +30,10 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [sec, setSec] = useState({ current: '', next: '', otp: '', busy: false })
   const [tab, setTab] = useState('company')
+  const [services, setServices] = useState([])
   const TABS = [
     { id: 'company', label: 'Company' },
+    { id: 'services', label: 'Services' },
     { id: 'invoice', label: 'Invoices' },
     { id: 'tickets', label: 'Tickets' },
     { id: 'documents', label: 'Documents' },
@@ -44,6 +46,7 @@ export default function Settings() {
     api('/api/v1/settings')
       .then((r) => {
         setCompany(r.data.company || {})
+        api('/api/v1/documents/services?all=1').then((s) => setServices(s.data || [])).catch(() => {})
         setSettings((s) => ({ ...s, ...(r.data.settings || {}) }))
       })
       .catch((e) => notify(e.message, 'error'))
@@ -294,7 +297,55 @@ export default function Settings() {
         </div>
         )}
 
-        {isAdmin && (tab === 'company' || tab === 'invoice' || tab === 'tickets') && (
+        
+      {tab === 'services' && (
+        <div className="card p-4 space-y-3">
+          <p className="text-xs text-slate-500">
+            Default rates for Remote and On-site support (used when adding lines or billing tickets).
+          </p>
+          <ul className="space-y-2">
+            {services.map((s) => (
+              <li key={s.id} className="flex flex-wrap items-center gap-2 text-sm border-b border-slate-100 dark:border-slate-800 pb-2">
+                <span className="font-medium min-w-[140px]">{s.name}</span>
+                <input
+                  className="input !w-28 !text-xs"
+                  type="number"
+                  step="0.01"
+                  defaultValue={s.default_price}
+                  id={`svc-price-${s.id}`}
+                  disabled={!isAdmin}
+                />
+                <span className="text-xs text-slate-500">/{s.unit}</span>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="btn-outline !text-[10px]"
+                    onClick={async () => {
+                      const el = document.getElementById(`svc-price-${s.id}`)
+                      try {
+                        await api(`/api/v1/documents/services/${s.id}`, {
+                          method: 'PATCH',
+                          body: { default_price: Number(el?.value || 0) },
+                        })
+                        notify('Service rate saved')
+                        const r = await api('/api/v1/documents/services?all=1')
+                        setServices(r.data || [])
+                      } catch (e) {
+                        notify(e.message, 'error')
+                      }
+                    }}
+                  >
+                    Save
+                  </button>
+                )}
+              </li>
+            ))}
+            {!services.length && <li className="text-slate-500 text-xs">No services yet — open Templates once to seed.</li>}
+          </ul>
+        </div>
+      )}
+
+{isAdmin && (tab === 'company' || tab === 'invoice' || tab === 'tickets') && (
           <button className="btn-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save all settings'}</button>
         )}
         {!isAdmin && (tab === 'company' || tab === 'invoice' || tab === 'tickets') && (

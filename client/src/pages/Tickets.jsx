@@ -43,6 +43,8 @@ export default function Tickets() {
   const [branches, setBranches] = useState([])
   const [staff, setStaff] = useState([])
   const [hourlyRate, setHourlyRate] = useState(450)
+  const [services, setServices] = useState([])
+  const [billServiceId, setBillServiceId] = useState('')
   const [selected, setSelected] = useState(null)
   const [detail, setDetail] = useState(null)
   const [showJobcard, setShowJobcard] = useState(false)
@@ -104,6 +106,7 @@ export default function Tickets() {
     api('/api/v1/platform/branches').then((r) => setBranches(r.data || [])).catch(() => {})
     api('/api/v1/tickets/staff').then((r) => setStaff(r.data || [])).catch(() => {})
     api('/api/v1/settings').then((r) => { const hr = r.data?.settings?.hourly_rate; if (hr != null) setHourlyRate(Number(hr) || 450) }).catch(() => {})
+    api('/api/v1/documents/services').then((r) => setServices(r.data || [])).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -180,16 +183,28 @@ export default function Tickets() {
   }
   const displaySeconds = useMemo(() => detail ? (detail.time_spent_seconds || 0) + (detail.timer_started_at ? liveTimer : 0) : 0, [detail, liveTimer])
   const billablePreview = useMemo(() => (displaySeconds / 3600) * hourlyRate, [displaySeconds, hourlyRate])
-  const billInvoice = async () => {
+  const billInvoice = async (extra = {}) => {
     if (!detail?.client_id) return notify('Assign a client first', 'error')
     const partsCount = (detail.parts || []).length
-    const msg = `Bill ${fmtTime(displaySeconds)} labour @ R${hourlyRate}/hr${partsCount ? ` + ${partsCount} part(s)` : ''} → invoice?`
+    const svc = services.find((s) => s.id === (extra.service_id || billServiceId))
+    const msg = `Bill ${fmtTime(displaySeconds)} labour @ R${hourlyRate}/hr${partsCount ? ` + ${partsCount} part(s)` : ''}${svc ? ` + ${svc.name}` : ''} → invoice?`
     if (!window.confirm(msg)) return
     setBusy(true)
     try {
+      const service_ids = []
+      if (extra.service_id) service_ids.push(extra.service_id)
+      else if (billServiceId) service_ids.push(billServiceId)
       const r = await api(`/api/v1/tickets/${selected}/bill`, {
         method: 'POST',
-        body: { hourly_rate: hourlyRate, mark_resolved: true, include_parts: true },
+        body: {
+          hourly_rate: hourlyRate,
+          mark_resolved: true,
+          include_parts: true,
+          service_ids,
+          service_type: svc?.name || detail.category || undefined,
+          pricing_model: 'hourly',
+          vat_enabled: false,
+        },
       })
       notify(
         `Invoice ${r.data.number} · ${fmtMoney(r.data.total)}${r.data.parts_count ? ` (${r.data.parts_count} parts)` : ''}`,
@@ -510,7 +525,40 @@ export default function Tickets() {
                     <input className="input !py-1 !w-14 text-xs" type="number" placeholder="min" value={manualMin} onChange={(e) => setManualMin(e.target.value)} />
                     <button type="button" className="btn-outline !text-xs" onClick={addManual}>Log</button>
                   </div>
-                  <button type="button" className="btn-primary w-full !text-xs" disabled={busy} onClick={billInvoice}>Bill → invoice</button>
+                  <select
+                    className="input !text-xs !py-1"
+                    value={billServiceId}
+                    onChange={(e) => setBillServiceId(e.target.value)}
+                    aria-label="Service to bill"
+                  >
+                    <option value="">Labour only (timer)</option>
+                    {services.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        + {s.name} (R {Number(s.default_price).toFixed(0)})
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn-primary w-full !text-xs" disabled={busy} onClick={() => billInvoice()}>
+                    Bill → invoice
+                  </button>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      className="btn-outline flex-1 !text-[10px]"
+                      disabled={busy}
+                      onClick={() => billInvoice({ service_id: 'svc_remote' })}
+                    >
+                      + Remote
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-outline flex-1 !text-[10px]"
+                      disabled={busy}
+                      onClick={() => billInvoice({ service_id: 'svc_onsite' })}
+                    >
+                      + On-site
+                    </button>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <button type="button" className="btn-outline flex-1 !text-xs" onClick={printJob}>Print job card</button>
                     <button type="button" className="btn-outline flex-1 !text-xs" onClick={pdfJob}>PDF job card</button>

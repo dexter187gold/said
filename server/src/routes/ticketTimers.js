@@ -99,9 +99,13 @@ export function mountTicketTimers(ticketsRouter) {
         .object({
           hourly_rate: z.coerce.number().positive().optional(),
           vat_rate: z.coerce.number().min(0).max(1).optional(),
+          vat_enabled: z.boolean().optional().default(false),
           note: z.string().optional().nullable(),
           mark_resolved: z.boolean().optional().default(true),
           include_parts: z.boolean().optional().default(true),
+          service_ids: z.array(z.string()).optional().default([]),
+          service_type: z.string().optional().nullable(),
+          pricing_model: z.enum(['hourly', 'flatrate', 'adhoc']).optional().nullable(),
         })
         .parse(req.body || {})
 
@@ -109,18 +113,59 @@ export function mountTicketTimers(ticketsRouter) {
       let increment = 15
       try {
         const row = db.prepare("SELECT value FROM settings WHERE key='hourly_rate'").get()
-        if (row && hourly == null) hourly = Number(JSON.parse(row.value))
+        if (row && hourly == null) {
+          try { hourly = Number(JSON.parse(row.value)) } catch { hourly = Number(row.value) }
+        }
       } catch {}
       try {
         const row = db.prepare("SELECT value FROM settings WHERE key='billable_increment_minutes'").get()
-        if (row) increment = Number(JSON.parse(row.value)) || 15
+        if (row) {
+          try { increment = Number(JSON.parse(row.value)) || 15 } catch { increment = Number(row.value) || 15 }
+        }
       } catch {}
       if (!hourly || hourly <= 0) hourly = 450
 
       const co = db.prepare('SELECT * FROM company WHERE id=?').get('main') || {}
-      const vatRate = body.vat_rate != null ? body.vat_rate : Number(co.default_vat_rate ?? 15) / 100
+      let vatRate = 0
+      if (body.vat_enabled || (body.vat_rate != null && body.vat_rate > 0)) {
+        vatRate = body.vat_rate != null ? body.vat_rate : Number(co.default_vat_rate || 0) / 100
+        if (vatRate > 1) vatRate = vatRate / 100
+      }
 
-      // EA-Q2: bill labour + parts; allow parts-only billing
+      // Service catalogue lines (Remote / On-site / etc.)
+      const serviceLines = []
+      for (const sid of body.service_ids || []) {
+        const svc = db.prepare(`SELECT * FROM service_catalog WHERE id = ? AND active = 1`).get(sid)
+        if (svc) {
+          serviceLines.push({
+            description: svc.description || svc.name,
+            qty: 1,
+            price: Number(svc.default_price) || 0,
+            name: svc.name,
+          })
+        }
+      }
+      // Auto-pick remote/onsite from ticket category if no services passed
+      if (!serviceLines.length && t.category) {
+        const cat = String(t.category).toLowerCase()
+        let code = null
+        if (cat === 'remote') code = 'svc_remote'
+        else if (cat === 'onsite') code = 'svc_onsite'
+        if (code) {
+          const svc = db.prepare(`SELECT * FROM service_catalog WHERE id = ?`).get(code)
+          if (svc) {
+            serviceLines.push({
+              description: svc.description || svc.name,
+              qty: 1,
+              price: Number(svc.default_price) || hourly,
+              name: svc.name,
+            })
+          }
+        }
+      }
+      const servicesTotal = serviceLines.reduce((s, l) => s + Number(l.qty) * Number(l.price), 0)
+
+      // EA-Q2: bill labour + parts + services
       let parts = []
       try {
         parts = JSON.parse(t.parts_json || '[]')
@@ -138,14 +183,15 @@ export function mountTicketTimers(ticketsRouter) {
       const roundedMin = minutes > 0 ? Math.ceil(minutes / increment) * increment : 0
       const hours = roundedMin / 60
       const labourExclusive = Math.round(hours * hourly * 100) / 100
-      const exclusive = Math.round((labourExclusive + partsTotal) * 100) / 100
+      // If service lines are support hours and no labour time, services alone OK
+      const exclusive = Math.round((labourExclusive + partsTotal + servicesTotal) * 100) / 100
       const vat_amount = Math.round(exclusive * vatRate * 100) / 100
       const total = Math.round((exclusive + vat_amount) * 100) / 100
 
       if (exclusive <= 0) {
         return res.status(400).json({
           error: true,
-          message: 'Need logged time (≥1 min) or parts with cost to bill',
+          message: 'Need logged time, parts, or a service (Remote / On-site) to bill',
         })
       }
 
@@ -171,7 +217,7 @@ export function mountTicketTimers(ticketsRouter) {
         date,
         date,
         notes,
-        t.category || 'support',
+        body.service_type || t.category || 'support',
         exclusive,
         vat_amount,
         total,
@@ -205,6 +251,28 @@ export function mountTicketTimers(ticketsRouter) {
           )
         }
       }
+      for (const sl of serviceLines) {
+        db.prepare(`INSERT INTO invoice_lines (id, invoice_id, description, qty, price) VALUES (?,?,?,?,?)`).run(
+          uid(),
+          invId,
+          sl.description,
+          sl.qty,
+          sl.price
+        )
+      }
+      const svcType =
+        body.service_type ||
+        serviceLines[0]?.name ||
+        t.category ||
+        'support'
+      try {
+        db.prepare(`UPDATE invoices SET service_type=?, pricing_model=?, template_id=? WHERE id=?`).run(
+          svcType,
+          body.pricing_model || (hours > 0 || serviceLines.some((s) => /remote|on-site|onsite|support/i.test(s.name || '')) ? 'hourly' : 'flatrate'),
+          body.pricing_model === 'flatrate' ? 'invoice_flatrate_cod' : 'invoice_hourly_cod',
+          invId
+        )
+      } catch {}
 
       // Activity log
       try {
