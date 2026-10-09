@@ -9,6 +9,8 @@ export default function Platform() {
   const [tab, setTab] = useState('flags')
   const [flags, setFlags] = useState([])
   const [audit, setAudit] = useState([])
+  const [auditAction, setAuditAction] = useState('')
+  const [auditQ, setAuditQ] = useState('')
   const [keys, setKeys] = useState([])
   const [branches, setBranches] = useState([])
   const [newKey, setNewKey] = useState(null)
@@ -31,7 +33,15 @@ export default function Platform() {
   const load = () => {
     api('/api/v1/platform/flags').then((r) => setFlags(r.data || [])).catch(() => {})
     if (isAdmin) {
-      api('/api/v1/platform/audit?limit=80').then((r) => setAudit(r.data || [])).catch(() => {})
+      ;(async () => {
+        const params = new URLSearchParams({ limit: '80' })
+        if (auditAction) params.set('action', auditAction)
+        if (auditQ) params.set('q', auditQ)
+        try {
+          const r = await api(`/api/v1/platform/audit?${params}`)
+          setAudit(r.data || [])
+        } catch {}
+      })()
       api('/api/v1/platform/api-keys').then((r) => setKeys(r.data || [])).catch(() => {})
       api('/api/v1/platform/popia/summary').then((r) => setPopia(r.data)).catch(() => {})
       api('/api/v1/platform/retention').then((r) => setRetention(r.data || [])).catch(() => {})
@@ -164,7 +174,22 @@ export default function Platform() {
             <p className="p-4 text-sm text-slate-500">Admin only</p>
           ) : (
             <>
-            <div className="p-2 border-b border-slate-100 dark:border-slate-800">
+            <div className="p-2 border-b border-slate-100 dark:border-slate-800 flex flex-wrap gap-2 items-center">
+              <input
+                className="input !text-xs !py-1 !w-28"
+                placeholder="Action filter"
+                value={auditAction}
+                onChange={(e) => setAuditAction(e.target.value)}
+              />
+              <input
+                className="input !text-xs !py-1 !w-32"
+                placeholder="Search"
+                value={auditQ}
+                onChange={(e) => setAuditQ(e.target.value)}
+              />
+              <button type="button" className="btn-outline !text-xs" onClick={load}>
+                Filter
+              </button>
               <button
                 type="button"
                 className="btn-outline !text-xs"

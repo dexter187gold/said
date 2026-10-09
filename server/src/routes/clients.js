@@ -140,3 +140,53 @@ clientsRouter.post('/import', requireRole('staff'), (req, res, next) => {
     res.status(201).json({ data: { created } })
   } catch (e) { next(e) }
 })
+
+
+
+
+clientsRouter.get('/:id/statement/whatsapp', requireRole('staff'), (req, res) => {
+  const c = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(req.params.id)
+  if (!c) return res.status(404).json({ error: true, message: 'Not found' })
+  const co = db.prepare(`SELECT * FROM company WHERE id='main'`).get() || {}
+  const invs = db
+    .prepare(
+      `SELECT number, date, due_date, status, total, amount_paid,
+              (total - amount_paid) AS balance
+       FROM invoices
+       WHERE client_id = ? AND COALESCE(doc_type,'invoice') = 'invoice'
+         AND status NOT IN ('cancelled')
+       ORDER BY date DESC LIMIT 20`
+    )
+    .all(req.params.id)
+  const open = invs.filter((i) => Number(i.balance) > 0.009 && i.status !== 'paid')
+  const outstanding = open.reduce((s, i) => s + Number(i.balance), 0)
+  const parts = [
+    `*Account statement* — ${co.name || 'SAID'}`,
+    `Client: ${c.name}`,
+    `As of: ${now().slice(0, 10)}`,
+    '',
+    open.length ? 'Open invoices:' : 'No open balances.',
+    ...open.slice(0, 12).map(
+      (i) => `• ${i.number} (${i.date}) — R ${Number(i.balance).toFixed(2)} [${i.status}]`
+    ),
+    '',
+    `*Total outstanding: R ${outstanding.toFixed(2)}*`,
+  ]
+  if (co.bank_name) {
+    parts.push(
+      '',
+      `EFT: ${co.bank_name} · ${co.account_number || ''} · Branch ${co.branch_code || ''}`
+    )
+  }
+  parts.push('Please use the invoice number as reference. Thank you.')
+  const text = parts.join('\n')
+  let phone = ''
+  if (c.phone) {
+    phone = String(c.phone).replace(/\D/g, '')
+    if (phone.startsWith('0')) phone = '27' + phone.slice(1)
+  }
+  const url = phone
+    ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+    : `https://wa.me/?text=${encodeURIComponent(text)}`
+  res.json({ data: { text, url, outstanding, open_count: open.length } })
+})

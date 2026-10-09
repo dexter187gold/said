@@ -1255,3 +1255,36 @@ fieldRouter.get('/utilisation', requireRole('staff'), (req, res) => {
     },
   })
 })
+
+
+/* ─── Hephaestus: preferred service on ticket (remote/onsite) ─── */
+try {
+  db.exec(`ALTER TABLE tickets ADD COLUMN preferred_service TEXT`)
+} catch {}
+
+fieldRouter.patch('/tickets/:id/preferred-service', requireRole('staff'), (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        preferred_service: z.enum(['remote', 'onsite', 'none', '']).optional().nullable(),
+        category: z.string().optional().nullable(),
+      })
+      .parse(req.body || {})
+    const t = db.prepare(`SELECT * FROM tickets WHERE id = ?`).get(req.params.id)
+    if (!t) return res.status(404).json({ error: true, message: 'Not found' })
+    let pref = body.preferred_service
+    if (pref === 'none') pref = null
+    let category = body.category
+    if (pref === 'remote') category = category || 'remote'
+    if (pref === 'onsite') category = category || 'onsite'
+    db.prepare(`UPDATE tickets SET preferred_service=?, category=COALESCE(?, category), updated_at=? WHERE id=?`).run(
+      pref || null,
+      category || null,
+      now(),
+      req.params.id
+    )
+    res.json({ data: db.prepare(`SELECT id, preferred_service, category FROM tickets WHERE id = ?`).get(req.params.id) })
+  } catch (e) {
+    next(e)
+  }
+})

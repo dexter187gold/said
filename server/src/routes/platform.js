@@ -83,14 +83,24 @@ function hashKey(raw) {
 /** Audit log (admin) */
 platformRouter.get('/audit', requireRole('admin'), (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100))
-  const rows = db
-    .prepare(
-      `SELECT a.*, u.name AS user_name, u.email AS user_email
+  const action = req.query.action
+  const q = req.query.q
+  let sql = `SELECT a.*, u.name AS user_name, u.email AS user_email
        FROM audit_log a
-       LEFT JOIN users u ON u.id = a.user_id
-       ORDER BY a.created_at DESC LIMIT ?`
-    )
-    .all(limit)
+       LEFT JOIN users u ON u.id = a.user_id WHERE 1=1`
+  const params = []
+  if (action) {
+    sql += ` AND a.action LIKE ?`
+    params.push(`%${action}%`)
+  }
+  if (q) {
+    sql += ` AND (a.detail LIKE ? OR a.action LIKE ? OR u.email LIKE ?)`
+    const like = `%${q}%`
+    params.push(like, like, like)
+  }
+  sql += ` ORDER BY a.created_at DESC LIMIT ?`
+  params.push(limit)
+  const rows = db.prepare(sql).all(...params)
   res.json({ data: rows })
 })
 
@@ -839,6 +849,9 @@ platformRouter.get('/security-score', requireRole('admin'), (_req, res) => {
   add('branch_policy', flags.branch_required !== 1 || staffNoBranch === 0, 'Branch policy healthy', 'Assign branches or disable branch_required')
   add('api_keys', true, `Active API keys: ${activeKeys}`, null)
   add('sessions', sessions < 50, 'Session count reasonable', 'Revoke stale sessions')
+  let svcCount = 0
+  try { svcCount = db.prepare(`SELECT COUNT(*) AS c FROM service_catalog WHERE active=1`).get().c } catch {}
+  add('services', svcCount >= 2, `Service catalogue (${svcCount})`, 'Open Templates to seed Remote/On-site services')
 
   const score = Math.round((checks.filter((c) => c.ok).length / checks.length) * 100)
   res.json({ data: { score, checks, last_backup_at: lastBackup || null, at: now() } })

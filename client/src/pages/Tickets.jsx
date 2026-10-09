@@ -538,6 +538,46 @@ export default function Tickets() {
                       </option>
                     ))}
                   </select>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      className="btn-outline flex-1 !text-[10px]"
+                      disabled={busy}
+                      onClick={async () => {
+                        try {
+                          await api(`/api/v1/field/tickets/${selected}/preferred-service`, {
+                            method: 'PATCH',
+                            body: { preferred_service: 'remote', category: 'remote' },
+                          })
+                          notify('Marked Remote support')
+                          openTicket(selected)
+                        } catch (e) {
+                          notify(e.message, 'error')
+                        }
+                      }}
+                    >
+                      Type: Remote
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-outline flex-1 !text-[10px]"
+                      disabled={busy}
+                      onClick={async () => {
+                        try {
+                          await api(`/api/v1/field/tickets/${selected}/preferred-service`, {
+                            method: 'PATCH',
+                            body: { preferred_service: 'onsite', category: 'onsite' },
+                          })
+                          notify('Marked On-site support')
+                          openTicket(selected)
+                        } catch (e) {
+                          notify(e.message, 'error')
+                        }
+                      }}
+                    >
+                      Type: On-site
+                    </button>
+                  </div>
                   <button type="button" className="btn-primary w-full !text-xs" disabled={busy} onClick={() => billInvoice()}>
                     Bill → invoice
                   </button>

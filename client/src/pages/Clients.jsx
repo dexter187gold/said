@@ -129,7 +129,23 @@ export default function Clients() {
             <div className="card p-3 space-y-2 max-h-[50vh] overflow-y-auto">
               <div className="flex justify-between gap-2"><h2 className="font-bold text-sm">{history.client?.name}</h2>
                 <div className="flex gap-1"><button type="button" className="btn-outline !text-xs" onClick={() => startEdit(history.client)}>Edit</button>
-                  <button type="button" className="btn-outline !text-xs" onClick={() => printStatement(history.client.id)}>Statement</button></div></div>
+                  <button type="button" className="btn-outline !text-xs" onClick={() => printStatement(history.client.id)}>Statement</button>
+                  <button
+                    type="button"
+                    className="btn-share bg-[#25D366] text-white !text-xs"
+                    onClick={async () => {
+                      try {
+                        const r = await api(`/api/v1/clients/${history.client.id}/statement/whatsapp`)
+                        window.open(r.data.url, '_blank', 'noopener')
+                        notify(`Outstanding R ${Number(r.data.outstanding).toFixed(2)}`)
+                      } catch (e) {
+                        notify(e.message, 'error')
+                      }
+                    }}
+                  >
+                    Statement WA
+                  </button>
+                  </div></div>
               <p className="text-[11px] text-slate-500">Outstanding {fmt(history.client?.outstanding)}{history.client?.credit_limit != null && ` · Limit ${fmt(history.client.credit_limit)}`}</p>
               <div className="label">Invoices</div>
               <ul className="text-xs space-y-1">{(history.invoices || []).slice(0, 8).map((i) => <li key={i.id} className="flex justify-between"><span>{i.number} · {i.status}</span><span>{fmt(i.total)}</span></li>)}</ul>

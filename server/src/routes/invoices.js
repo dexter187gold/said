@@ -103,6 +103,40 @@ invoicesRouter.get('/', (req, res) => {
 
 mountInvoiceExtras(invoicesRouter, { loadInvoice, nextNumber })
 
+/* ─── Athena-Wood: payment terms presets + professional WA share ─── */
+const PAYMENT_TERMS = [
+  {
+    id: 'cod',
+    label: 'COD — pay on completion',
+    text: '100% due on completion and hand-over / collection, unless stated otherwise in writing. Cash, EFT (with proof) or instant payment. Devices released only after payment confirmation.',
+  },
+  {
+    id: 'eft7',
+    label: 'EFT 7 days',
+    text: 'Payment due within 7 days of invoice date by EFT. Use the invoice number as payment reference.',
+  },
+  {
+    id: 'eft14',
+    label: 'EFT 14 days',
+    text: 'Payment due within 14 days of invoice date by EFT. Use the invoice number as payment reference.',
+  },
+  {
+    id: 'deposit50',
+    label: '50% deposit',
+    text: '50% deposit before work starts; balance on completion before device release / sign-off.',
+  },
+  {
+    id: 'retainer',
+    label: 'Retainer / account',
+    text: 'Billed against active retainer or account terms. Statement available on request.',
+  },
+]
+
+invoicesRouter.get('/meta/payment-terms', (_req, res) => {
+  res.json({ data: PAYMENT_TERMS })
+})
+
+
 invoicesRouter.get('/:id', (req, res) => {
   const inv = loadInvoice(req.params.id)
   if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
@@ -316,4 +350,49 @@ invoicesRouter.post('/:id/duplicate', requireRole('staff'), (req, res, next) => 
   } catch (e) {
     next(e)
   }
+})
+
+invoicesRouter.get('/:id/whatsapp', requireRole('staff'), (req, res) => {
+  const inv = loadInvoice(req.params.id)
+  if (!inv) return res.status(404).json({ error: true, message: 'Not found' })
+  const co = db.prepare(`SELECT * FROM company WHERE id='main'`).get() || {}
+  const bal = Math.max(0, Number(inv.total) - Number(inv.amount_paid || 0))
+  const model = inv.pricing_model || 'flatrate'
+  const modelLabel =
+    model === 'hourly' ? 'Hourly / time & materials' : model === 'adhoc' ? 'Ad-hoc / rate card' : 'Flat rate / package'
+  const lines = (inv.lines || [])
+    .slice(0, 8)
+    .map((l) => `• ${l.description} — ${l.qty} × R ${Number(l.price).toFixed(2)}`)
+    .join('\n')
+  const text = [
+    `*${co.name || 'SAID'}*`,
+    `${inv.doc_type === 'quote' ? 'Quote' : inv.doc_type === 'credit' ? 'Credit note' : 'Invoice'} *${inv.number}*`,
+    inv.client?.name ? `To: ${inv.client.name}` : null,
+    `Date: ${inv.date}`,
+    inv.due_date ? `Due: ${inv.due_date}` : null,
+    `Pricing: ${modelLabel}`,
+    inv.service_type ? `Service: ${inv.service_type}` : null,
+    '',
+    lines || null,
+    '',
+    `*Total: R ${Number(inv.total).toFixed(2)}*`,
+    Number(inv.amount_paid) > 0 ? `Paid: R ${Number(inv.amount_paid).toFixed(2)}` : null,
+    bal > 0.009 ? `*Balance due: R ${bal.toFixed(2)}*` : '*Paid in full*',
+    inv.payment_note ? `\n${inv.payment_note}` : null,
+    co.bank_name
+      ? `\nBank: ${co.bank_name} · Acc ${co.account_number || ''} · Branch ${co.branch_code || ''}\nRef: ${inv.number}`
+      : null,
+    '\nThank you — we appreciate your business.',
+  ]
+    .filter((x) => x != null)
+    .join('\n')
+  let phone = ''
+  if (inv.client?.phone) {
+    phone = String(inv.client.phone).replace(/\D/g, '')
+    if (phone.startsWith('0')) phone = '27' + phone.slice(1)
+  }
+  const url = phone
+    ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+    : `https://wa.me/?text=${encodeURIComponent(text)}`
+  res.json({ data: { text, url, number: inv.number } })
 })

@@ -30,6 +30,7 @@ export default function InvoiceEdit() {
   const [lines, setLines] = useState([{ description: '', qty: 1, price: 0 }])
   const [snippets, setSnippets] = useState([])
   const [services, setServices] = useState([])
+  const [paymentTerms, setPaymentTerms] = useState([])
   const [pricingModel, setPricingModel] = useState('flatrate')
   const [vatEnabled, setVatEnabled] = useState(false)
   const [vatRate, setVatRate] = useState(0.15)
@@ -56,6 +57,7 @@ export default function InvoiceEdit() {
   useEffect(() => {
     api('/api/v1/documents/line-snippets').then((r) => setSnippets(r.data || [])).catch(() => {})
     api('/api/v1/documents/services').then((r) => setServices(r.data || [])).catch(() => {})
+    api('/api/v1/invoices/meta/payment-terms').then((r) => setPaymentTerms(r.data || [])).catch(() => {})
   }, [])
   useEffect(() => {
     api('/api/v1/clients').then((r) => setClients(r.data)).catch(() => {})
@@ -197,6 +199,22 @@ export default function InvoiceEdit() {
         <div className="flex gap-2">
           <Link className="btn-outline" to={listPath}>Back</Link>
           {!isNew && <button type="button" className="btn-outline" onClick={pdf}>PDF</button>}
+          {!isNew && (
+            <button
+              type="button"
+              className="btn-share bg-[#25D366] text-white !text-xs"
+              onClick={async () => {
+                try {
+                  const r = await api(`/api/v1/invoices/${id}/whatsapp`)
+                  window.open(r.data.url, '_blank', 'noopener')
+                } catch (e) {
+                  notify(e.message, 'error')
+                }
+              }}
+            >
+              WhatsApp
+            </button>
+          )}
         </div>
       </div>
 
@@ -470,6 +488,25 @@ export default function InvoiceEdit() {
 
         <div className="card space-y-3 p-4">
           <div>
+            <label className="label">Payment terms</label>
+            {paymentTerms.length > 0 && (
+              <select
+                className="input mb-1"
+                defaultValue=""
+                onChange={(e) => {
+                  const pt = paymentTerms.find((x) => x.id === e.target.value)
+                  if (pt) setPaymentNote(pt.text)
+                  e.target.value = ''
+                }}
+              >
+                <option value="">Apply preset…</option>
+                {paymentTerms.map((pt) => (
+                  <option key={pt.id} value={pt.id}>
+                    {pt.label}
+                  </option>
+                ))}
+              </select>
+            )}
             <label className="label">Payment note</label>
             <textarea className="input" rows={2} value={paymentNote} onChange={(e) => setPaymentNote(e.target.value)} />
           </div>
